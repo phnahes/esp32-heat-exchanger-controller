@@ -1,38 +1,35 @@
 // Routes
-
 void handleData() {
   String json = "{";
 
   json += "\"source\":[";
   for (int i = 0; i < 10; i++) {
-    int index = (currentIndex + i) % 10;
-    json += String(sourceTempHistory[index]);
+    json += String(sourceTempHistory[i], 2);
     if (i < 9) json += ",";
   }
 
   json += "],\"target\":[";
   for (int i = 0; i < 10; i++) {
-    int index = (currentIndex + i) % 10;
-    json += String(targetTempHistory[index]);
+    json += String(targetTempHistory[i], 2);
     if (i < 9) json += ",";
   }
 
   json += "],\"cold\":[";
   for (int i = 0; i < 10; i++) {
-    int index = (currentIndex + i) % 10;
-    json += String(coldTempHistory[index]);
+    json += String(coldTempHistory[i], 2);
     if (i < 9) json += ",";
   }
 
-  // Novo: também enviar última leitura atual para atualizar o box de sensores
-  int lastIndex = (currentIndex + 9) % 10;
-  json += "],\"last_source\":" + String(sourceTempHistory[lastIndex]);
-  json += ",\"last_target\":" + String(targetTempHistory[lastIndex]);
-  json += ",\"last_cold\":" + String(coldTempHistory[lastIndex]);
+  // Envia também as últimas leituras para o box de sensores
+  json += "],\"last_source\":" + String(tempSource, 2);
+  json += ",\"last_target\":" + String(tempTarget, 2);
+  json += ",\"last_cold\":" + String(tempCold, 2);
 
   json += "}";
   server.send(200, "application/json", json);
 }
+
+
 
 void handleRoot() {
   estimatedColdFlow = (coldPumpDuration / (float)coldPumpInterval) * theoreticalMaxColdFlow;
@@ -55,19 +52,17 @@ void handleRoot() {
   html += "canvas {background:#fff; border-radius:10px;}";
   html += ":root {--bg-color:#ecf0f1; --text-color:#2c3e50; --card-bg:#ffffff;}";
   html += "body.light {--bg-color:#2c3e50; --text-color:#ecf0f1; --card-bg:#34495e;}";
-  html += "@media (max-width: 768px) {";
-  html += "  .grid { max-width: 100%; }";
-  html += "  .card {grid-column: span 1 !important;}";
-  html += "}";
+  html += "@media (max-width: 768px) {.grid {} .card {grid-column: span 1 !important;}}";
   html += "</style>";
   html += "<script src=\"/chart.min.js\"></script></head>";
   html += "<body style='background: var(--bg-color); color: var(--text-color);'>";
   html += "<div style='text-align:right;'><button onclick=\"toggleMode()\">Toggle Light/Dark</button> ";
   html += "<button onclick=\"toggleSettings()\">Show/Hide Settings</button></div>";
-  html += "<h1>Heat Exchanger Controller</h1>";
+  html += "<h1>ESP32 Heat Exchanger Controller</h1>";
 
   html += "<div class='grid'>";
 
+  // Ajustes
   html += "<div class='card' id='settings' style='display:none;'><h2>Adjust Settings</h2><form action='/set'>";
   html += "<label>Cold Interval (ms):</label><input name='interval' value='" + String(coldPumpInterval) + "'><br>";
   html += "<label>Cold Duration (ms):</label><input name='duration' value='" + String(coldPumpDuration) + "'><br>";
@@ -76,56 +71,93 @@ void handleRoot() {
   html += "<br><button type='submit'>Save</button></form>";
   html += "<button onclick=\"fetch('/reset_history').then(()=>alert('History cleared!'));\">Reset History</button></div>";
 
+  // Sensores
   html += "<div class='card'><h2>Sensors</h2><p>";
-  html += "Source Recipe Temp.: <b>" + String(tempSource, 1) + " &deg;C</b><br>";
-  html += "Target Recipe Temp.: <b>" + String(tempTarget, 1) + " &deg;C</b><br>";
-  html += "Cold Recipe Temp.: <b>" + String(tempCold, 1) + " &deg;C</b></p></div>";
+  html += "Source Recipe Temp.: <b id='sourceTemp'>" + String(tempSource, 1) + " \u00B0C</b><br>";
+  html += "Target Recipe Temp.: <b id='targetTemp'>" + String(tempTarget, 1) + " \u00B0C</b><br>";
+  html += "Cold Recipe Temp.: <b id='coldTemp'>" + String(tempCold, 1) + " \u00B0C</b></p></div>";
 
+  // Nível
   html += "<div class='card'><h2>Water Level</h2>";
   html += "<p>Status: <span class='badge " + String(levelDetected ? "yes'>YES" : "no'>NO") + "</span></p></div>";
 
+  // Cold Pump
   html += "<div class='card'><h2>Cold Pump</h2>";
   html += "<p>Interval: <b>" + String(coldPumpInterval) + " ms</b><br>";
   html += "Duration: <b>" + String(coldPumpDuration) + " ms</b><br>";
   html += "Duty: <b>" + String(coldDuty, 1) + "%</b><br>";
   html += "Flow: <b>" + String(estimatedColdFlow, 1) + " L/h</b></p></div>";
 
+  // Target Pump
   html += "<div class='card'><h2>Target Pump</h2>";
   html += "<p>Interval: <b>" + String(targetPumpInterval) + " ms</b><br>";
   html += "Duration: <b>" + String(targetPumpDuration) + " ms</b><br>";
   html += "Duty: <b>" + String(targetDuty, 1) + "%</b><br>";
   html += "Flow: <b>" + String(estimatedTargetFlow, 1) + " L/h</b></p></div>";
 
+  // Gráfico
   html += "<div class='card' style='grid-column: span 2;'><h2>Temperature Graph</h2>";
   html += "<canvas id='chart'></canvas></div>";
 
   html += "</div>";
 
+  // JS para toggle e gráfico + atualizações
   html += "<script>";
-  html += "function toggleMode(){document.body.classList.toggle('light');}";
-  html += "function toggleSettings(){var s=document.getElementById('settings'); s.style.display=(s.style.display==='none')?'block':'none';}";
-  html += "let ctx=document.getElementById('chart').getContext('2d');";
-  html += "let chart=new Chart(ctx,{type:'line',data:{labels:[],datasets:[{label:'Source',data:[],borderColor:'red',fill:false},{label:'Target',data:[],borderColor:'blue',fill:false},{label:'Cold',data:[],borderColor:'green',fill:false}]},options:{scales:{x:{title:{display:true,text:'Time (s)'}},y:{title:{display:true,text:'Temperature (\u00B0C)'}}}}});";
+  html += "function toggleMode() { document.body.classList.toggle('light'); }";
+  html += "function toggleSettings() { var s = document.getElementById('settings'); s.style.display = (s.style.display === 'none') ? 'block' : 'none'; }";
 
-  html += "fetch('/data').then(r=>r.json()).then(d=>{";
-  html += "chart.data.labels = [...Array(10).keys()];";
-  html += "chart.data.datasets[0].data = d.source;";
-  html += "chart.data.datasets[1].data = d.target;";
-  html += "chart.data.datasets[2].data = d.cold;";
-  html += "chart.update();});";
-  html += "setInterval(()=>{fetch('/data').then(r=>r.json()).then(d=>{";
-  html += "chart.data.labels = [...Array(10).keys()];";
-  html += "chart.data.datasets[0].data = d.source;";
-  html += "chart.data.datasets[1].data = d.target;";
-  html += "chart.data.datasets[2].data = d.cold;";
-  html += "chart.update();});},5000);";
+  // 👉 Variáveis do ESP32
+  html += "const historySize = " + String(HISTORY_SIZE) + ";";
+  html += "const lineTension = " + String(lineTension, 1) + ";";
+
+  // 👉 Variáveis de configuração front-end
+  html += "const animationEnabled = " + String(animationEnabled ? "true" : "false") + ";";
+  html += "const sourceColor = 'red';";
+  html += "const targetColor = 'blue';";
+  html += "const coldColor = 'green';";
+  html += "const sourceLabel = 'Source Recipe';";
+  html += "const targetLabel = 'Target Recipe';";
+  html += "const coldLabel = 'Cold Recipe';";
+
+  // 👉 Criação do gráfico
+  html += "let ctx = document.getElementById('chart').getContext('2d');";
+  html += "let chart = new Chart(ctx, {";
+  html += "  type: 'line',";
+  html += "  data: {";
+  html += "    labels: [],";
+  html += "    datasets: [";
+  html += "      { label: sourceLabel, data: [], borderColor: sourceColor, fill: false, tension: lineTension },";
+  html += "      { label: targetLabel, data: [], borderColor: targetColor, fill: false, tension: lineTension },";
+  html += "      { label: coldLabel, data: [], borderColor: coldColor, fill: false, tension: lineTension }";
+  html += "    ]";
+  html += "  },";
+  html += "  options: {";
+  html += "    animation: animationEnabled ? {} : { duration: 0 },";
+  html += "    scales: {";
+  html += "      x: { title: { display: true, text: 'Time (s)' } },";
+  html += "      y: { title: { display: true, text: 'Temperature (\\u00B0C)' } }";
+  html += "    }";
+  html += "  }";
+  html += "});";
+
+  // 👉 Atualização automática
+  html += "setInterval(() => {";
+  html += "  fetch('/data').then(r => r.json()).then(d => {";
+  html += "    chart.data.labels = [...Array(historySize).keys()];";
+  html += "    chart.data.datasets[0].data = d.source;";
+  html += "    chart.data.datasets[1].data = d.target;";
+  html += "    chart.data.datasets[2].data = d.cold;";
+  html += "    chart.update();";
+  html += "    document.getElementById('sourceTemp').innerHTML = d.last_source.toFixed(1) + ' \\u00B0C';";
+  html += "    document.getElementById('targetTemp').innerHTML = d.last_target.toFixed(1) + ' \\u00B0C';";
+  html += "    document.getElementById('coldTemp').innerHTML = d.last_cold.toFixed(1) + ' \\u00B0C';";
+  html += "  });";
+  html += "}, 5000);";
 
   html += "</script></body></html>";
 
   server.send(200, "text/html", html);
 }
-
-
 
 
 void handleSet() {

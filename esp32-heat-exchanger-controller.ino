@@ -38,11 +38,23 @@ bool testMode = true;  // ou false para modo normal
 float tempCold = 0.0, tempSource = 0.0, tempTarget = 0.0;
 bool levelDetected = false;
 
+// Chart
+// Animations
+bool animationEnabled = false;
+
+// Suavization / Tension
+float lineTension = 0.4; // Suavização da linha (0 = reta, 1 = curva extrema)
+
 // History (10 points)
-float sourceTempHistory[10] = { 0 };
-float targetTempHistory[10] = { 0 };
-float coldTempHistory[10] = { 0 };
-int currentIndex = 0;
+unsigned long lastHistoryUpdate = 0;
+const unsigned long historyUpdateInterval = 10000;  // Atualizar histórico a cada 5 segundos
+
+const int HISTORY_SIZE = 10;
+float sourceTempHistory[HISTORY_SIZE];
+float targetTempHistory[HISTORY_SIZE];
+float coldTempHistory[HISTORY_SIZE];
+
+
 
 // WiFi + Server
 WebServer server(80);
@@ -54,6 +66,12 @@ void handleRoot();
 void handleSet();
 void handleData();
 
+void shiftAndAdd(float* arr, int size, float newValue) {
+  for (int i = 0; i < size - 1; i++) {
+    arr[i] = arr[i + 1];  // move tudo pra esquerda
+  }
+  arr[size - 1] = newValue;  // coloca novo valor no final
+}
 
 // Setup
 void setup() {
@@ -84,12 +102,11 @@ void setup() {
   });
 
   server.on("/reset_history", []() {
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < HISTORY_SIZE; i++) {
       sourceTempHistory[i] = 0;
       targetTempHistory[i] = 0;
       coldTempHistory[i] = 0;
     }
-    currentIndex = 0;
     server.send(200, "text/plain", "History reset");
   });
 
@@ -101,22 +118,26 @@ void setup() {
 void loop() {
   server.handleClient();
 
-  if (testMode) {
-    // Modo teste: gera valores aleatórios
-    tempSource = random(1000, 10000) / 100.0;
-    tempTarget = random(1000, 10000) / 100.0;
-    tempCold = random(1000, 10000) / 100.0;
-  } else {
-    // Modo normal: lê sensores
-    sensors.requestTemperatures();
-    tempCold = sensors.getTempC(sensor_cold);
-    tempSource = sensors.getTempC(sensor_source);
-    tempTarget = sensors.getTempC(sensor_target);
-  }
-
-  levelDetected = digitalRead(LEVEL_SENSOR_PIN);
-
   unsigned long now = millis();
+
+  // 👉 Apenas gera e insere no histórico no intervalo certo
+  if (now - lastHistoryUpdate >= historyUpdateInterval) {
+    if (testMode) {
+      tempSource = random(1000, 10000) / 100.0;
+      tempTarget = random(1000, 10000) / 100.0;
+      tempCold = random(1000, 10000) / 100.0;
+    } else {
+      tempSource = sensors.getTempC(sensor_source);
+      tempTarget = sensors.getTempC(sensor_target);
+      tempCold = sensors.getTempC(sensor_cold);
+    }
+
+    shiftAndAdd(sourceTempHistory, HISTORY_SIZE, tempSource);
+    shiftAndAdd(targetTempHistory, HISTORY_SIZE, tempTarget);
+    shiftAndAdd(coldTempHistory, HISTORY_SIZE, tempCold);
+
+    lastHistoryUpdate = now;
+  }
 
   // Cold pump pulsing
   if (now - lastColdPulse >= coldPumpInterval && !coldPumpActive) {
@@ -157,10 +178,5 @@ void loop() {
 
   if (levelDetected) digitalWrite(VALVE_PIN, LOW);
 
-  // Salvar no histórico circular
-  sourceTempHistory[currentIndex] = tempSource;
-  targetTempHistory[currentIndex] = tempTarget;
-  coldTempHistory[currentIndex] = tempCold;
-  currentIndex = (currentIndex + 1) % 10;
   delay(100);
 }

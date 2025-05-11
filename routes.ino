@@ -20,6 +20,12 @@ void handleData() {
     if (i < 9) json += ",";
   }
 
+  json += "],\"efficiency\":[";
+  for (int i = 0; i < 10; i++) {
+    json += String(efficiencyHistory[i], 2);
+    if (i < 9) json += ",";
+  }
+
   // Envia também as últimas leituras para o box de sensores
   json += "],\"last_source\":" + String(tempSource, 2);
   json += ",\"last_target\":" + String(tempTarget, 2);
@@ -56,48 +62,54 @@ void handleRoot() {
   html += "</style>";
   html += "<script src=\"/chart.min.js\"></script></head>";
   html += "<body style='background: var(--bg-color); color: var(--text-color);'>";
-  html += "<div style='text-align:right;'><button onclick=\"toggleMode()\">Toggle Light/Dark</button> ";
-  html += "<button onclick=\"toggleSettings()\">Show/Hide Settings</button></div>";
-  html += "<h1>ESP32 Heat Exchanger Controller</h1>";
+
+  // Botões
+  html += "<div class='header-buttons'>";
+  html += "<button onclick=\"toggleMode()\">Toggle Mode</button>";
+  html += "<button onclick=\"toggleSettings()\">Settings</button>";
+  html += "</div>";
+
+  html += "<h1>Heat Exchanger Controller</h1>";
 
   html += "<div class='grid'>";
 
   // Ajustes
   html += "<div class='card' id='settings' style='display:none;'><h2>Adjust Settings</h2><form action='/set'>";
-  html += "<label>Cold Interval (ms):</label><input name='interval' value='" + String(coldPumpInterval) + "'><br>";
-  html += "<label>Cold Duration (ms):</label><input name='duration' value='" + String(coldPumpDuration) + "'><br>";
-  html += "<label>Target Interval (ms):</label><input name='target_interval' value='" + String(targetPumpInterval) + "'><br>";
-  html += "<label>Target Duration (ms):</label><input name='target_duration' value='" + String(targetPumpDuration) + "'><br>";
+  html += "<label>Cold Pump Pulse Interval (ms):</label><input name='interval' value='" + String(coldPumpInterval) + "'><br>";
+  html += "<label>Cold Pump Pulse Duration (ms):</label><input name='duration' value='" + String(coldPumpDuration) + "'><br>";
+  html += "<label>Target Recipe Pump Interval (ms):</label><input name='target_interval' value='" + String(targetPumpInterval) + "'><br>";
+  html += "<label>Target Recipe Pump Duration (ms):</label><input name='target_duration' value='" + String(targetPumpDuration) + "'><br>";
   html += "<br><button type='submit'>Save</button></form>";
   html += "<button onclick=\"fetch('/reset_history').then(()=>alert('History cleared!'));\">Reset History</button></div>";
 
   // Sensores
-  html += "<div class='card'><h2>Sensors</h2><p>";
-  html += "Source Recipe Temp.: <b id='sourceTemp'>" + String(tempSource, 1) + " \u00B0C</b><br>";
-  html += "Target Recipe Temp.: <b id='targetTemp'>" + String(tempTarget, 1) + " \u00B0C</b><br>";
-  html += "Cold Recipe Temp.: <b id='coldTemp'>" + String(tempCold, 1) + " \u00B0C</b></p></div>";
+  html += "<div class='card'><h2>Temperature Sensors</h2><p>";
+  html += "Source Recipe: <b id='sourceTemp'>" + String(tempSource, 1) + " &deg;C</b><br>";
+  html += "Target Recipe: <b id='targetTemp'>" + String(tempTarget, 1) + " &deg;C</b><br>";
+  html += "Cold Recipe: <b id='coldTemp'>" + String(tempCold, 1) + " &deg;C</b></p></div>";
 
-  // Nível
-  html += "<div class='card'><h2>Water Level</h2>";
-  html += "<p>Status: <span class='badge " + String(levelDetected ? "yes'>YES" : "no'>NO") + "</span></p></div>";
+  // Status
+  html += "<div class='card'><h2>Status</h2>";
+  html += "<p>Water Level: <span class='badge " + String(levelDetected ? "yes'>YES" : "no'>NO") + "</span></p>";
+  html += "<p>Heater: <span class='badge " + String(heaterStatus ? "yes'>ON" : "no'>OFF") + "</span></p></div>";
 
   // Cold Pump
-  html += "<div class='card'><h2>Cold Pump</h2>";
+  html += "<div class='card'><h2>Cold Recipe Pump</h2>";
   html += "<p>Interval: <b>" + String(coldPumpInterval) + " ms</b><br>";
   html += "Duration: <b>" + String(coldPumpDuration) + " ms</b><br>";
   html += "Duty: <b>" + String(coldDuty, 1) + "%</b><br>";
   html += "Flow: <b>" + String(estimatedColdFlow, 1) + " L/h</b></p></div>";
 
   // Target Pump
-  html += "<div class='card'><h2>Target Pump</h2>";
+  html += "<div class='card'><h2>Target Recipe Pump</h2>";
   html += "<p>Interval: <b>" + String(targetPumpInterval) + " ms</b><br>";
   html += "Duration: <b>" + String(targetPumpDuration) + " ms</b><br>";
   html += "Duty: <b>" + String(targetDuty, 1) + "%</b><br>";
   html += "Flow: <b>" + String(estimatedTargetFlow, 1) + " L/h</b></p></div>";
 
   // Gráfico
-  html += "<div class='card' style='grid-column: span 2;'><h2>Temperature Graph</h2>";
-  html += "<canvas id='chart'></canvas></div>";
+  html += "<div class='card' style='grid-column: span 4;'><h2>Temperature Graph</h2>";
+  html += "<canvas id='chart' style='max-height: 300px; width: 100%;'></canvas></div>";
 
   html += "</div>";
 
@@ -109,6 +121,7 @@ void handleRoot() {
   // 👉 Variáveis do ESP32
   html += "const historySize = " + String(HISTORY_SIZE) + ";";
   html += "const lineTension = " + String(lineTension, 1) + ";";
+  html += "const historyInterval = " + String(historyUpdateInterval / 1000) + ";";
 
   // 👉 Variáveis de configuração front-end
   html += "const animationEnabled = " + String(animationEnabled ? "true" : "false") + ";";
@@ -118,6 +131,8 @@ void handleRoot() {
   html += "const sourceLabel = 'Source Recipe';";
   html += "const targetLabel = 'Target Recipe';";
   html += "const coldLabel = 'Cold Recipe';";
+  html += "const efficiencyColor = 'orange';";
+  html += "const efficiencyLabel = 'Efficiency %';";
 
   // 👉 Criação do gráfico
   html += "let ctx = document.getElementById('chart').getContext('2d');";
@@ -126,15 +141,17 @@ void handleRoot() {
   html += "  data: {";
   html += "    labels: [],";
   html += "    datasets: [";
-  html += "      { label: sourceLabel, data: [], borderColor: sourceColor, fill: false, tension: lineTension },";
-  html += "      { label: targetLabel, data: [], borderColor: targetColor, fill: false, tension: lineTension },";
-  html += "      { label: coldLabel, data: [], borderColor: coldColor, fill: false, tension: lineTension }";
+  html += "      { label: sourceLabel, data: [], borderColor: sourceColor, fill: false, tension: lineTension, borderDash: [5, 5] },";
+  html += "      { label: targetLabel, data: [], borderColor: targetColor, fill: false, tension: lineTension, borderDash: [5, 5] },";
+  html += "      { label: coldLabel, data: [], borderColor: coldColor, fill: false, tension: lineTension, borderDash: [5, 5] },";
+  html += "      { label: efficiencyLabel, data: [], borderColor: efficiencyColor, fill: false, tension: lineTension }";
   html += "    ]";
   html += "  },";
   html += "  options: {";
   html += "    animation: animationEnabled ? {} : { duration: 0 },";
+  html += "    maintainAspectRatio: false,";
   html += "    scales: {";
-  html += "      x: { title: { display: true, text: 'Time (s)' } },";
+  html += "      x: { title: { display: true, text: 'Time (s) since boot' } },";
   html += "      y: { title: { display: true, text: 'Temperature (\\u00B0C)' } }";
   html += "    }";
   html += "  }";
@@ -143,10 +160,11 @@ void handleRoot() {
   // 👉 Atualização automática
   html += "setInterval(() => {";
   html += "  fetch('/data').then(r => r.json()).then(d => {";
-  html += "    chart.data.labels = [...Array(historySize).keys()];";
+  html += "    chart.data.labels = [...Array(historySize).keys()].map(i => i * historyInterval);";
   html += "    chart.data.datasets[0].data = d.source;";
   html += "    chart.data.datasets[1].data = d.target;";
   html += "    chart.data.datasets[2].data = d.cold;";
+  html += "    chart.data.datasets[3].data = d.efficiency;";
   html += "    chart.update();";
   html += "    document.getElementById('sourceTemp').innerHTML = d.last_source.toFixed(1) + ' \\u00B0C';";
   html += "    document.getElementById('targetTemp').innerHTML = d.last_target.toFixed(1) + ' \\u00B0C';";

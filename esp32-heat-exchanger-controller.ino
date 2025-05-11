@@ -38,12 +38,15 @@ bool testMode = true;  // ou false para modo normal
 float tempCold = 0.0, tempSource = 0.0, tempTarget = 0.0;
 bool levelDetected = false;
 
+// Heater
+bool heaterStatus = false;
+
 // Chart
 // Animations
 bool animationEnabled = false;
 
 // Suavization / Tension
-float lineTension = 0.4; // Suavização da linha (0 = reta, 1 = curva extrema)
+float lineTension = 0.4;  // Suavização da linha (0 = reta, 1 = curva extrema)
 
 // History (10 points)
 unsigned long lastHistoryUpdate = 0;
@@ -53,7 +56,7 @@ const int HISTORY_SIZE = 10;
 float sourceTempHistory[HISTORY_SIZE];
 float targetTempHistory[HISTORY_SIZE];
 float coldTempHistory[HISTORY_SIZE];
-
+float efficiencyHistory[HISTORY_SIZE];
 
 
 // WiFi + Server
@@ -65,6 +68,15 @@ const char* password = "12345678";
 void handleRoot();
 void handleSet();
 void handleData();
+
+void clearHistory() {
+  for (int i = 0; i < HISTORY_SIZE; i++) {
+    sourceTempHistory[i] = 0;
+    targetTempHistory[i] = 0;
+    coldTempHistory[i] = 0;
+    efficiencyHistory[i] = 0;
+  }
+}
 
 void shiftAndAdd(float* arr, int size, float newValue) {
   for (int i = 0; i < size - 1; i++) {
@@ -92,6 +104,8 @@ void setup() {
   sensors.getAddress(sensor_source, 1);
   sensors.getAddress(sensor_target, 2);
 
+  clearHistory();
+
   WiFi.softAP(ssid, password);
   server.on("/", handleRoot);
   server.on("/data", handleData);
@@ -102,11 +116,7 @@ void setup() {
   });
 
   server.on("/reset_history", []() {
-    for (int i = 0; i < HISTORY_SIZE; i++) {
-      sourceTempHistory[i] = 0;
-      targetTempHistory[i] = 0;
-      coldTempHistory[i] = 0;
-    }
+    clearHistory();
     server.send(200, "text/plain", "History reset");
   });
 
@@ -135,9 +145,17 @@ void loop() {
     shiftAndAdd(sourceTempHistory, HISTORY_SIZE, tempSource);
     shiftAndAdd(targetTempHistory, HISTORY_SIZE, tempTarget);
     shiftAndAdd(coldTempHistory, HISTORY_SIZE, tempCold);
-
+    
+    // Efficiency
+    float deltaT = tempSource - tempTarget;
+    float efficiency = (tempSource > 0) ? (deltaT / tempSource * 100.0) : 0.0; // evita divisão por zero
+    shiftAndAdd(efficiencyHistory, HISTORY_SIZE, efficiency);
+    
     lastHistoryUpdate = now;
   }
+
+  heaterStatus = digitalRead(HEATER_PIN);
+
 
   // Cold pump pulsing
   if (now - lastColdPulse >= coldPumpInterval && !coldPumpActive) {

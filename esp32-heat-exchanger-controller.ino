@@ -18,7 +18,7 @@
 const char* ssidAP = "ESP32-HeatControl";
 const char* passwordAP = "12345678";
 const char* ssidSTA = "IOT-SRV";
-const char* passwordSTA = "12345678";
+const char* passwordSTA = "123@123";
 
 // Setup
 OneWire oneWire(ONE_WIRE_BUS);
@@ -26,7 +26,7 @@ DallasTemperature sensors(&oneWire);
 // DeviceAddress sensor_cold, sensor_source, sensor_target;
 
 // Sensores
-const DeviceAddress sensor_cold   = { 0x28, 0x84, 0xF4, 0x49, 0xF6, 0xEF, 0x3C, 0xCE };
+const DeviceAddress sensor_cold = { 0x28, 0x84, 0xF4, 0x49, 0xF6, 0xEF, 0x3C, 0xCE };
 const DeviceAddress sensor_source = { 0x28, 0x65, 0xBF, 0x49, 0xF6, 0xD3, 0x3C, 0x29 };
 const DeviceAddress sensor_target = { 0x28, 0x13, 0x3F, 0x49, 0xF6, 0x09, 0x3C, 0x77 };
 
@@ -36,7 +36,7 @@ unsigned long targetPumpInterval = 0;
 unsigned long targetPumpDuration = 0;
 bool targetPumpActive = false;
 
-float tempCold = 0.0, tempSource = 0.0, tempTarget = 0.0;
+float tempCold = 20.0, tempSource = 20.0, tempTarget = 20.0;
 bool levelDetected = false;
 bool heaterStatus = false;
 bool heaterLockout = false;
@@ -77,6 +77,17 @@ float efficiencyHistory[HISTORY_SIZE];
 WebServer server(80);
 
 // --- Funções auxiliares ---
+
+// Adicione esta função em seu código
+void setRelay(int pin, bool on) {
+  // Para módulos de relé low-level trigger:
+  // LOW = ligado; HIGH = desligado
+  digitalWrite(pin, on ? LOW : HIGH);
+}
+
+bool isRelayOn(uint8_t pin) {
+  return digitalRead(pin) == LOW;   // LOW = relé ativo (ON)
+}
 
 void clearHistory() {
   for (int i = 0; i < HISTORY_SIZE; i++) {
@@ -168,10 +179,10 @@ void setup() {
   pinMode(TARGET_PUMP_PIN, OUTPUT);
   pinMode(LEVEL_SENSOR_PIN, INPUT);
   pinMode(LED_AP_PIN, OUTPUT);
-  digitalWrite(VALVE_PIN, LOW);
-  digitalWrite(HEATER_PIN, LOW);
-  digitalWrite(COLD_PUMP_PIN, LOW);
-  digitalWrite(TARGET_PUMP_PIN, LOW);
+  setRelay(VALVE_PIN, false);
+  setRelay(HEATER_PIN, false);
+  setRelay(COLD_PUMP_PIN, false);
+  setRelay(TARGET_PUMP_PIN, false);
   digitalWrite(LED_AP_PIN, LOW);
 
   sensors.begin();
@@ -263,10 +274,10 @@ void loop() {
   server.handleClient();
 
   if (manualMode) {
-    digitalWrite(COLD_PUMP_PIN, manualColdPumpActive ? HIGH : LOW);
-    digitalWrite(TARGET_PUMP_PIN, manualTargetPumpActive ? HIGH : LOW);
-    digitalWrite(HEATER_PIN, manualHeaterActive ? HIGH : LOW);
-    digitalWrite(VALVE_PIN, manualValveActive ? HIGH : LOW);
+    setRelay(COLD_PUMP_PIN, manualColdPumpActive);
+    setRelay(TARGET_PUMP_PIN, manualTargetPumpActive);
+    setRelay(HEATER_PIN, manualHeaterActive);
+    setRelay(VALVE_PIN, manualValveActive);
     delay(100);
     return;
   }
@@ -305,54 +316,52 @@ void loop() {
   // 👉 Cold Pump: pulso ou contínuo
   if (coldPumpInterval > 0 && coldPumpDuration > 0) {
     if (now - lastColdPulse >= coldPumpInterval && !coldPumpActive) {
-      digitalWrite(COLD_PUMP_PIN, HIGH);
+      setRelay(COLD_PUMP_PIN, true);
       lastColdPulse = now;
       coldPumpActive = true;
     }
     if (coldPumpActive && now - lastColdPulse >= coldPumpDuration) {
-      digitalWrite(COLD_PUMP_PIN, LOW);
+      setRelay(COLD_PUMP_PIN, false);
       coldPumpActive = false;
     }
   } else {
-    digitalWrite(COLD_PUMP_PIN, HIGH);  // 👉 modo contínuo
+    setRelay(COLD_PUMP_PIN, true);
   }
 
   // 👉 Target Pump control: depende da válvula aberta
-  if (digitalRead(VALVE_PIN) == HIGH) {
+  if (digitalRead(VALVE_PIN) == LOW) {
     if (targetPumpInterval > 0 && targetPumpDuration > 0) {
       if (now - lastTargetPulse >= targetPumpInterval && !targetPumpActive) {
-        digitalWrite(TARGET_PUMP_PIN, HIGH);
+        setRelay(TARGET_PUMP_PIN, true);
         lastTargetPulse = now;
         targetPumpActive = true;
       }
       if (targetPumpActive && now - lastTargetPulse >= targetPumpDuration) {
-        digitalWrite(TARGET_PUMP_PIN, LOW);
+        setRelay(TARGET_PUMP_PIN, false);
         targetPumpActive = false;
       }
     } else {
-      digitalWrite(TARGET_PUMP_PIN, HIGH);  // 👉 modo contínuo
+      setRelay(TARGET_PUMP_PIN, true);
     }
   } else {
-    digitalWrite(TARGET_PUMP_PIN, LOW);
+    setRelay(TARGET_PUMP_PIN, false);
     targetPumpActive = false;
   }
 
-  // 👉 Heater + valve + lockout
   if (!heaterLockout) {
     if (tempSource < 60.0) {
-      digitalWrite(HEATER_PIN, HIGH);
+      Serial.println(tempSource);
+      setRelay(HEATER_PIN, true);
     } else {
-      digitalWrite(HEATER_PIN, LOW);
-      if (!levelDetected) {
-        digitalWrite(VALVE_PIN, HIGH);
-        heaterLockout = true;
-      }
+      setRelay(HEATER_PIN, false);
+      setRelay(VALVE_PIN, true);
+      heaterLockout = true;
     }
   } else {
-    digitalWrite(HEATER_PIN, LOW);
+    setRelay(HEATER_PIN, false);
   }
 
-  if (levelDetected) digitalWrite(VALVE_PIN, LOW);
+  // if (levelDetected) setRelay(VALVE_PIN, false);
 
   delay(100);
 }

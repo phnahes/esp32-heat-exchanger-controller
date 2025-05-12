@@ -30,12 +30,13 @@ void handleData() {
   json += ",\"last_target\":" + String(tempTarget, 2);
   json += ",\"last_cold\":" + String(tempCold, 2);
 
-  // Novos campos para atualização do Status
-  json += ",\"heater\":" + String(digitalRead(HEATER_PIN) ? "1" : "0");
-  json += ",\"cold_pump\":" + String(digitalRead(COLD_PUMP_PIN) ? "1" : "0");
-  json += ",\"target_pump\":" + String(digitalRead(TARGET_PUMP_PIN) ? "1" : "0");
-  json += ",\"valve\":" + String(digitalRead(VALVE_PIN) ? "1" : "0");
+  // Novos campos para atualização do Status (corrigido para relés invertidos)
+  json += ",\"heater\":" + String(isRelayOn(HEATER_PIN) ? "1" : "0");
+  json += ",\"cold_pump\":" + String(isRelayOn(COLD_PUMP_PIN) ? "1" : "0");
+  json += ",\"target_pump\":" + String(isRelayOn(TARGET_PUMP_PIN) ? "1" : "0");
+  json += ",\"valve\":" + String(isRelayOn(VALVE_PIN) ? "1" : "0");
   json += ",\"mode\":" + String(manualMode ? "1" : "0");
+
 
   json += "}";
   server.send(200, "application/json", json);
@@ -93,14 +94,14 @@ void handleRoot() {
   html += "Cold Recipe: <b id='coldTemp'>" + String(tempCold, 1) + " &deg;C</b></p>";
   html += "<h2>System Status</h2>";
   html += "<table style='width:100%; font-size:1em;'>";
-  html += "<tr><td>Heater</td><td><span id='status-heater' class='badge " + String(digitalRead(HEATER_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
-  html += "<tr><td>Cold Pump</td><td><span id='status-cold' class='badge " + String(digitalRead(COLD_PUMP_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
-  html += "<tr><td>Target Pump</td><td><span id='status-target' class='badge " + String(digitalRead(TARGET_PUMP_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
-  html += "<tr><td>Valve</td><td><span id='status-valve' class='badge " + String(digitalRead(VALVE_PIN) ? "yes'>OPEN" : "no'>CLOSED") + "</span></td></tr>";
+  html += "<tr><td>Heater</td><td><span id='status-heater' class='badge " + String(isRelayOn(HEATER_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
+  html += "<tr><td>Cold Pump</td><td><span id='status-cold' class='badge " + String(isRelayOn(COLD_PUMP_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
+  html += "<tr><td>Target Pump</td><td><span id='status-target' class='badge " + String(isRelayOn(TARGET_PUMP_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
+  html += "<tr><td>Valve</td><td><span id='status-valve' class='badge " + String(isRelayOn(VALVE_PIN) ? "yes'>OPEN" : "no'>CLOSED") + "</span></td></tr>";
   html += "<tr><td>Mode</td><td><span id='status-mode' class='badge " + String(manualMode ? "no'>MANUAL" : "yes'>AUTO") + "</span></td></tr>";
   html += "</table></div>";
 
-  // Pumps Info 
+  // Pumps Info
   html += "<div class='card'><h2>Pumps Info</h2>";
 
   // 👉 Cold Pump

@@ -8,17 +8,19 @@
 // Pins
 #define ONE_WIRE_BUS 4
 #define LEVEL_SENSOR_PIN 14
-#define VALVE_PIN 25
-#define HEATER_PIN 26
-#define COLD_PUMP_PIN 27
-#define TARGET_PUMP_PIN 33
+
+#define HEATER_PIN 25
+#define VALVE_PIN 26
+#define TARGET_PUMP_PIN 27
+#define COLD_PUMP_PIN 33
+
 #define LED_AP_PIN 2  // LED da placa
 
 // WiFi Credentials
 const char* ssidAP = "ESP32-HeatControl";
 const char* passwordAP = "12345678";
-const char* ssidSTA = "IOT-SRV";
-const char* passwordSTA = "123@123";
+const char* ssidSTA = "Cativeiro";
+const char* passwordSTA = "123@n4h3s";
 
 // Setup
 OneWire oneWire(ONE_WIRE_BUS);
@@ -29,6 +31,14 @@ DallasTemperature sensors(&oneWire);
 const DeviceAddress sensor_cold = { 0x28, 0x84, 0xF4, 0x49, 0xF6, 0xEF, 0x3C, 0xCE };
 const DeviceAddress sensor_source = { 0x28, 0x65, 0xBF, 0x49, 0xF6, 0xD3, 0x3C, 0x29 };
 const DeviceAddress sensor_target = { 0x28, 0x13, 0x3F, 0x49, 0xF6, 0x09, 0x3C, 0x77 };
+
+unsigned long lastWebCheck = 0;
+unsigned long lastSensorRequest = 0;
+const unsigned long webCheckInterval = 20;         // 20ms para webserver
+const unsigned long sensorRequestInterval = 2000;  // 30s
+
+unsigned long lastSensorPrint = 0;
+const unsigned long sensorPrintInterval = 2000;
 
 // Pump control
 unsigned long lastTargetPulse = 0;
@@ -66,7 +76,7 @@ bool animationEnabled = false;
 float lineTension = 0.4;
 
 unsigned long lastHistoryUpdate = 0;
-const unsigned long historyUpdateInterval = 10000;
+const unsigned long historyUpdateInterval = 5000;
 const int HISTORY_SIZE = 10;
 float sourceTempHistory[HISTORY_SIZE];
 float targetTempHistory[HISTORY_SIZE];
@@ -86,7 +96,7 @@ void setRelay(int pin, bool on) {
 }
 
 bool isRelayOn(uint8_t pin) {
-  return digitalRead(pin) == LOW;   // LOW = relé ativo (ON)
+  return digitalRead(pin) == LOW;  // LOW = relé ativo (ON)
 }
 
 void clearHistory() {
@@ -188,6 +198,8 @@ void setup() {
   sensors.begin();
   sensors.setWaitForConversion(false);
 
+  WiFi.setSleep(false);
+
   clearHistory();
   connectToWiFiOrAP();
 
@@ -195,6 +207,7 @@ void setup() {
   server.on("/data", handleData);
   server.on("/set", handleSet);
   server.on("/chart.min.js", HTTP_GET, []() {
+    server.sendHeader("Cache-Control", "public, max-age=31536000");  // 1 ano de cache
     server.send_P(200, "application/javascript", chartJs);
   });
   server.on("/reset_history", []() {
@@ -205,60 +218,48 @@ void setup() {
   // Rotas manual mode
   server.on("/manual/on", []() {
     manualMode = true;
-    server.send(200, "text/plain", "Manual mode ON");
+    server.send(200, "text/plain", "Manual ON");
   });
-
   server.on("/manual/off", []() {
     manualMode = false;
-    manualColdPumpActive = false;
-    manualTargetPumpActive = false;
-    manualHeaterActive = false;
-    manualValveActive = false;
-    server.send(200, "text/plain", "Manual mode OFF");
+    manualColdPumpActive = manualTargetPumpActive = manualHeaterActive = manualValveActive = false;
+    server.send(200, "text/plain", "Manual OFF");
   });
-
   server.on("/manual/cold/on", []() {
     manualMode = true;
     manualColdPumpActive = true;
-    server.send(200, "text/plain", "Cold pump ON");
+    server.send(200, "text/plain", "Cold Pump ON");
   });
-
   server.on("/manual/cold/off", []() {
     manualMode = true;
     manualColdPumpActive = false;
-    server.send(200, "text/plain", "Cold pump OFF");
+    server.send(200, "text/plain", "Cold Pump OFF");
   });
-
   server.on("/manual/target/on", []() {
     manualMode = true;
     manualTargetPumpActive = true;
-    server.send(200, "text/plain", "Target pump ON");
+    server.send(200, "text/plain", "Target Pump ON");
   });
-
   server.on("/manual/target/off", []() {
     manualMode = true;
     manualTargetPumpActive = false;
-    server.send(200, "text/plain", "Target pump OFF");
+    server.send(200, "text/plain", "Target Pump OFF");
   });
-
   server.on("/manual/heater/on", []() {
     manualMode = true;
     manualHeaterActive = true;
     server.send(200, "text/plain", "Heater ON");
   });
-
   server.on("/manual/heater/off", []() {
     manualMode = true;
     manualHeaterActive = false;
     server.send(200, "text/plain", "Heater OFF");
   });
-
   server.on("/manual/valve/on", []() {
     manualMode = true;
     manualValveActive = true;
     server.send(200, "text/plain", "Valve OPEN");
   });
-
   server.on("/manual/valve/off", []() {
     manualMode = true;
     manualValveActive = false;
@@ -271,32 +272,51 @@ void setup() {
 
 // --- Loop principal ---
 void loop() {
-  server.handleClient();
+  unsigned long now = millis();
+
+  // Webserver
+  if (now - lastWebCheck >= webCheckInterval) {
+    server.handleClient();
+    lastWebCheck = now;
+  }
 
   if (manualMode) {
     setRelay(COLD_PUMP_PIN, manualColdPumpActive);
     setRelay(TARGET_PUMP_PIN, manualTargetPumpActive);
     setRelay(HEATER_PIN, manualHeaterActive);
     setRelay(VALVE_PIN, manualValveActive);
-    delay(100);
+    vTaskDelay(1);
     return;
   }
 
-  unsigned long now = millis();
+  // ✅ Leitura contínua dos sensores
+  if (!testMode && now - lastSensorRequest >= sensorRequestInterval) {
+    sensors.requestTemperatures();  // ✅ esta linha resolve o problema
 
-  // Atualiza sensores com leitura assíncrona
+    tempSource = sensors.getTempC(sensor_source);
+    tempTarget = sensors.getTempC(sensor_target);
+    tempCold = sensors.getTempC(sensor_cold);
+    lastSensorRequest = now;
+  }
+
+  // ✅ Log Serial
+  if (now - lastSensorPrint >= sensorPrintInterval) {
+    Serial.print("Source: ");
+    Serial.print(tempSource, 2);
+    Serial.print(" C | Target: ");
+    Serial.print(tempTarget, 2);
+    Serial.print(" C | Cold: ");
+    Serial.print(tempCold, 2);
+    Serial.println(" C");
+    lastSensorPrint = now;
+  }
+
+  // ✅ Atualiza histórico (mantém a lógica)
   if (now - lastHistoryUpdate >= historyUpdateInterval) {
     if (testMode) {
       tempSource = random(250, 1200) / 10.0;
       tempTarget = random(250, 1200) / 10.0;
       tempCold = random(250, 1200) / 10.0;
-    } else {
-      sensors.setWaitForConversion(false);
-      sensors.requestTemperatures();
-
-      tempSource = sensors.getTempC(sensor_source);
-      tempTarget = sensors.getTempC(sensor_target);
-      tempCold = sensors.getTempC(sensor_cold);
     }
 
     shiftAndAdd(sourceTempHistory, HISTORY_SIZE, tempSource);
@@ -310,10 +330,10 @@ void loop() {
     lastHistoryUpdate = now;
   }
 
-  // Atualiza nível
+  // Leitura do nível
   levelDetected = digitalRead(LEVEL_SENSOR_PIN);
 
-  // 👉 Cold Pump: pulso ou contínuo
+  // Controle da Cold Pump
   if (coldPumpInterval > 0 && coldPumpDuration > 0) {
     if (now - lastColdPulse >= coldPumpInterval && !coldPumpActive) {
       setRelay(COLD_PUMP_PIN, true);
@@ -328,7 +348,7 @@ void loop() {
     setRelay(COLD_PUMP_PIN, true);
   }
 
-  // 👉 Target Pump control: depende da válvula aberta
+  // Controle da Target Pump
   if (digitalRead(VALVE_PIN) == LOW) {
     if (targetPumpInterval > 0 && targetPumpDuration > 0) {
       if (now - lastTargetPulse >= targetPumpInterval && !targetPumpActive) {
@@ -348,9 +368,9 @@ void loop() {
     targetPumpActive = false;
   }
 
+  // Controle do Heater e Valve
   if (!heaterLockout) {
     if (tempSource < 60.0) {
-      Serial.println(tempSource);
       setRelay(HEATER_PIN, true);
     } else {
       setRelay(HEATER_PIN, false);
@@ -361,7 +381,5 @@ void loop() {
     setRelay(HEATER_PIN, false);
   }
 
-  // if (levelDetected) setRelay(VALVE_PIN, false);
-
-  delay(100);
+  vTaskDelay(1);
 }

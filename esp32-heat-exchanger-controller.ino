@@ -4,23 +4,30 @@
 #include "chartjs.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// Defina o endereço do seu adaptador I2C do LCD.
+// A maioria usa 0x27 ou 0x3F. Teste se necessário.
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);  // (endereço, colunas, linhas)
 
 // Pins
-#define ONE_WIRE_BUS 4
+#define ONE_WIRE_BUS 23
 #define LEVEL_SENSOR_PIN 14
 
-#define HEATER_PIN 25
-#define VALVE_PIN 26
-#define TARGET_PUMP_PIN 27
-#define COLD_PUMP_PIN 33
+#define HEATER_PIN 33
+#define VALVE_PIN 32
+#define TARGET_PUMP_PIN 25
+#define COLD_PUMP_PIN 26
 
 #define LED_AP_PIN 2  // LED da placa
 
 // WiFi Credentials
 const char* ssidAP = "ESP32-HeatControl";
 const char* passwordAP = "12345678";
-const char* ssidSTA = "Cativeiro";
-const char* passwordSTA = "123@n4h3s";
+const char* ssidSTA = "IOT-SRV";
+const char* passwordSTA = "p4ul0n4h3s@123";
 
 // Setup
 OneWire oneWire(ONE_WIRE_BUS);
@@ -195,6 +202,16 @@ void setup() {
   setRelay(TARGET_PUMP_PIN, false);
   digitalWrite(LED_AP_PIN, LOW);
 
+  lcd.init();  // initialize the lcd
+  lcd.init();
+  lcd.backlight();  // Liga o backlight
+  lcd.setCursor(0, 0);
+  lcd.print("Heat Control");
+  lcd.setCursor(0, 1);
+  lcd.print("Iniciando...");
+  delay(2000);
+  lcd.clear();
+
   sensors.begin();
   sensors.setWaitForConversion(false);
 
@@ -308,6 +325,21 @@ void loop() {
     Serial.print(" C | Cold: ");
     Serial.print(tempCold, 2);
     Serial.println(" C");
+
+    // ✅ LCD display
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Src:");
+    lcd.print(tempSource, 1);
+    lcd.print(" Tgt:");
+    lcd.print(tempTarget, 1);
+
+    lcd.setCursor(0, 1);
+    lcd.print("Cold:");
+    lcd.print(tempCold, 1);
+    lcd.print("C");
+
+
     lastSensorPrint = now;
   }
 

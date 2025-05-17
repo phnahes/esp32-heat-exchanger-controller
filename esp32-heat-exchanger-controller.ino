@@ -165,28 +165,28 @@ void setup() {
     lcd.print("Connected to:");
     lcd.setCursor(0, 1);
     lcd.print(WiFi.SSID());
-    delay(2000);
+    delay(1000);
     lcd.clear();
 
     lcd.setCursor(0, 0);
     lcd.print("IP Address:");
     lcd.setCursor(0, 1);
     lcd.print(WiFi.localIP());
-    delay(3000);
+    delay(1500);
     lcd.clear();
   } else if (WiFi.getMode() == WIFI_AP) {
     lcd.setCursor(0, 0);
     lcd.print("Access Point");
     lcd.setCursor(0, 1);
     lcd.print(WiFi.softAPIP());
-    delay(3000);
+    delay(1000);
     lcd.clear();
   } else {
     lcd.setCursor(0, 0);
     lcd.print("Wi-Fi Failed");
     lcd.setCursor(0, 1);
     lcd.print("Using fallback...");
-    delay(3000);
+    delay(1000);
     lcd.clear();
   }
 
@@ -195,7 +195,7 @@ void setup() {
   lcd.print("Getting recipes");
   lcd.setCursor(0, 1);
   lcd.print("Temperatures...");
-  delay(2000);
+  delay(1000);
   lcd.clear();
 
 
@@ -277,21 +277,43 @@ void loop() {
     shiftAndAdd(targetTempHistory, HISTORY_SIZE, tempTarget);
     shiftAndAdd(coldTempHistory, HISTORY_SIZE, tempCold);
 
-    // Calculo de eficiencia
+    // Cálculo de eficiência térmica
     float deltaFull = tempSource - tempCold;
     float deltaTarget = tempTarget - tempCold;
-
     float efficiency = 0.0;
-    if (deltaFull > 0.5) {  // evita divisões irreais ou instáveis
-      efficiency = deltaTarget / deltaFull;
-      efficiency = constrain(efficiency, 0.0, 1.0);  // clamp como proporção (0.0–1.0)
-      efficiency *= 100.0;                           // converte para porcentagem
+
+    Serial.print("[EFF] Source: ");
+    Serial.print(tempSource, 2);
+    Serial.print(" | Target: ");
+    Serial.print(tempTarget, 2);
+    Serial.print(" | Cold: ");
+    Serial.print(tempCold, 2);
+    Serial.print(" | ΔFull: ");
+    Serial.print(deltaFull, 2);
+    Serial.print(" | ΔTarget: ");
+    Serial.print(deltaTarget, 2);
+
+    if (deltaFull > 0.5) {  // Evita divisões instáveis
+      if (deltaTarget < 0) {
+        efficiency = 100.0;  // Target abaixo do cold → resfriamento máximo
+        Serial.print(" | Target abaixo do Cold → eficiência máxima");
+      } else {
+        efficiency = (deltaTarget / deltaFull) * 100.0;  // Como porcentagem
+        efficiency = constrain(efficiency, 0.0, 100.0);
+      }
     } else {
-      efficiency = 0.0;  // ou NAN, se quiser indicar que é inválido
+      efficiency = 0.0;
+      Serial.print(" | ΔFull muito pequeno");
     }
 
+    Serial.print(" | Eficiência calculada: ");
+    Serial.print(efficiency, 1);
+    Serial.println(" %");
+
+    // Armazena a eficiência já como porcentagem
     coolingEfficiency = efficiency;
     shiftAndAdd(efficiencyHistory, HISTORY_SIZE, efficiency);
+
 
     lastHistoryUpdate = now;
   }

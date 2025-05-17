@@ -87,9 +87,10 @@ void handleData() {
     if (i < 9) json += ",";
   }
 
+  // 👇 Aqui foi o ajuste crucial
   json += "],\"efficiency\":[";
   for (int i = 0; i < 10; i++) {
-    json += String(efficiencyHistory[i] * 100.0, 2);
+    json += String(efficiencyHistory[i], 2);
     if (i < 9) json += ",";
   }
 

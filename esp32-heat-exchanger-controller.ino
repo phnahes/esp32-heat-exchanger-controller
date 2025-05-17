@@ -7,19 +7,15 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
-// Defina o endereço do seu adaptador I2C do LCD.
-// A maioria usa 0x27 ou 0x3F. Teste se necessário.
-
 LiquidCrystal_I2C lcd(0x27, 16, 2);  // (endereço, colunas, linhas)
 
 // Pins
-#define ONE_WIRE_BUS 23
-#define LEVEL_SENSOR_PIN 14
+#define ONE_WIRE_BUS 14
 
-#define HEATER_PIN 33
-#define VALVE_PIN 32
-#define TARGET_PUMP_PIN 25
-#define COLD_PUMP_PIN 26
+#define HEATER_PIN 27       // 4
+#define TARGET_PUMP_PIN 33  // 1
+#define COLD_PUMP_PIN 25    // 2
+#define VALVE_PIN 33        // 1
 
 #define LED_AP_PIN 2  // LED da placa
 
@@ -65,6 +61,8 @@ unsigned long coldPumpDuration = 1000;
 bool coldPumpActive = false;
 float theoreticalMaxColdFlow = 1000.0;
 float estimatedColdFlow = 0.0;
+float coolingEfficiency = 0.0;  // inicializa como 0%
+
 
 // Target pump
 float theoreticalMaxTargetFlow = 65.0;  // bomba real = 1.0-1.1 L/min ≈ 65 L/h
@@ -90,208 +88,128 @@ float targetTempHistory[HISTORY_SIZE];
 float coldTempHistory[HISTORY_SIZE];
 float efficiencyHistory[HISTORY_SIZE];
 
+// Global
+// Variável global para armazenar temperatura máxima do Source
+float maxTempSource = 0.0;
+float previousTargetTemp = 20.0;
+
+// Display
+int animationDelay = 120;
+
 // WebServer
 WebServer server(80);
 
 // --- Funções auxiliares ---
 
-// Adicione esta função em seu código
-void setRelay(int pin, bool on) {
-  // Para módulos de relé low-level trigger:
-  // LOW = ligado; HIGH = desligado
-  digitalWrite(pin, on ? LOW : HIGH);
-}
+// --- Forward declarations ---
+String calcularTempoResfriamento(float targetTemp, float coldTemp, float volumeLitros, float pumpPower, float eficiencia);
+void handleOverTemperatureBlink();
+void displayTemperatures();
+void setRelay(int pin, bool on);
+bool isRelayOn(uint8_t pin);
+void clearHistory();
+void shiftAndAdd(float* arr, int size, float newValue);
+void configRoutes();
+void connectToWiFiOrAP();
 
-bool isRelayOn(uint8_t pin) {
-  return digitalRead(pin) == LOW;  // LOW = relé ativo (ON)
-}
+void desplazar_dino();
 
-void clearHistory() {
-  for (int i = 0; i < HISTORY_SIZE; i++) {
-    sourceTempHistory[i] = 0;
-    targetTempHistory[i] = 0;
-    coldTempHistory[i] = 0;
-    efficiencyHistory[i] = 0;
-  }
-}
+void setManualMode(bool manual);
+void manualColdPump(bool on);
+void manualTargetPump(bool on);
+void manualHeater(bool on);
 
-void shiftAndAdd(float* arr, int size, float newValue) {
-  for (int i = 0; i < size - 1; i++)
-    arr[i] = arr[i + 1];
-  arr[size - 1] = newValue;
-}
-
-void connectToWiFiOrAP() {
-  String complete_hostname = "esp32-heatcontrol";
-  complete_hostname.toLowerCase();
-  WiFi.setHostname(complete_hostname.c_str());
-  WiFi.begin(ssidSTA, passwordSTA);
-  Serial.print("Conectando à rede WiFi");
-  unsigned long startAttemptTime = millis();
-
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
-    Serial.print(".");
-    delay(500);
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConectado ao WiFi!");
-    Serial.println(WiFi.localIP());
-    digitalWrite(LED_AP_PIN, LOW);
-  } else {
-    Serial.println("\nFalha ao conectar, iniciando modo AP.");
-    WiFi.softAP(ssidAP, passwordAP);
-    Serial.println(WiFi.softAPIP());
-    digitalWrite(LED_AP_PIN, HIGH);
-  }
-}
-
-// --- Modo manual ---
-
-void setManualMode(bool manual) {
-  manualMode = manual;
-  if (!manual) {
-    digitalWrite(COLD_PUMP_PIN, LOW);
-    digitalWrite(TARGET_PUMP_PIN, LOW);
-    digitalWrite(HEATER_PIN, LOW);
-    manualColdPumpActive = false;
-    manualTargetPumpActive = false;
-    manualHeaterActive = false;
-  }
-}
-
-void manualColdPump(bool on) {
-  if (manualMode) {
-    digitalWrite(COLD_PUMP_PIN, on ? HIGH : LOW);
-    manualColdPumpActive = on;
-  }
-}
-
-void manualTargetPump(bool on) {
-  if (manualMode) {
-    digitalWrite(TARGET_PUMP_PIN, on ? HIGH : LOW);
-    manualTargetPumpActive = on;
-  }
-}
-
-void manualHeater(bool on) {
-  if (manualMode) {
-    digitalWrite(HEATER_PIN, on ? HIGH : LOW);
-    manualHeaterActive = on;
-  }
-}
-
-// --- Handlers web (ainda placeholders) ---
 void handleRoot();
 void handleData();
 void handleSet();
+
 
 // --- Setup ---
 void setup() {
   Serial.begin(115200);
 
-  pinMode(VALVE_PIN, OUTPUT);
   pinMode(HEATER_PIN, OUTPUT);
   pinMode(COLD_PUMP_PIN, OUTPUT);
   pinMode(TARGET_PUMP_PIN, OUTPUT);
-  pinMode(LEVEL_SENSOR_PIN, INPUT);
   pinMode(LED_AP_PIN, OUTPUT);
-  setRelay(VALVE_PIN, false);
+
   setRelay(HEATER_PIN, false);
-  setRelay(COLD_PUMP_PIN, false);
+  setRelay(COLD_PUMP_PIN, true);  // Bomba fria sempre ligada
   setRelay(TARGET_PUMP_PIN, false);
   digitalWrite(LED_AP_PIN, LOW);
 
-  lcd.init();  // initialize the lcd
   lcd.init();
-  lcd.backlight();  // Liga o backlight
+  lcd.backlight();
+
+  // Introdução
+  // lcd.setCursor(0, 0);
+  // lcd.print("Heat Exchanger");
+  // lcd.setCursor(0, 1);
+  // lcd.print("Controller");
+  // delay(2000);
+  // lcd.clear();
+
+  desplazar_dino();
+
+  // Desativa modo sleep do Wi-Fi e limpa histórico
+  WiFi.setSleep(false);
+  clearHistory();
+
+  // Conecta
+  connectToWiFiOrAP();
+  delay(500);  // pequena pausa para garantir estado
+
+  // Identificação do modo de operação
+  if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED) {
+    lcd.setCursor(0, 0);
+    lcd.print("Connected to:");
+    lcd.setCursor(0, 1);
+    lcd.print(WiFi.SSID());
+    delay(2000);
+    lcd.clear();
+
+    lcd.setCursor(0, 0);
+    lcd.print("IP Address:");
+    lcd.setCursor(0, 1);
+    lcd.print(WiFi.localIP());
+    delay(3000);
+    lcd.clear();
+  } else if (WiFi.getMode() == WIFI_AP) {
+    lcd.setCursor(0, 0);
+    lcd.print("Access Point");
+    lcd.setCursor(0, 1);
+    lcd.print(WiFi.softAPIP());
+    delay(3000);
+    lcd.clear();
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("Wi-Fi Failed");
+    lcd.setCursor(0, 1);
+    lcd.print("Using fallback...");
+    delay(3000);
+    lcd.clear();
+  }
+
+  // Mensagem de transição para sensores
   lcd.setCursor(0, 0);
-  lcd.print("Heat Control");
+  lcd.print("Getting recipes");
   lcd.setCursor(0, 1);
-  lcd.print("Iniciando...");
+  lcd.print("Temperatures...");
   delay(2000);
   lcd.clear();
+
 
   sensors.begin();
   sensors.setWaitForConversion(false);
 
-  WiFi.setSleep(false);
-
-  clearHistory();
-  connectToWiFiOrAP();
-
-  server.on("/", handleRoot);
-  server.on("/data", handleData);
-  server.on("/set", handleSet);
-  server.on("/chart.min.js", HTTP_GET, []() {
-    server.sendHeader("Cache-Control", "public, max-age=31536000");  // 1 ano de cache
-    server.send_P(200, "application/javascript", chartJs);
-  });
-  server.on("/reset_history", []() {
-    clearHistory();
-    server.send(200, "text/plain", "History reset");
-  });
-
-  // Rotas manual mode
-  server.on("/manual/on", []() {
-    manualMode = true;
-    server.send(200, "text/plain", "Manual ON");
-  });
-  server.on("/manual/off", []() {
-    manualMode = false;
-    manualColdPumpActive = manualTargetPumpActive = manualHeaterActive = manualValveActive = false;
-    server.send(200, "text/plain", "Manual OFF");
-  });
-  server.on("/manual/cold/on", []() {
-    manualMode = true;
-    manualColdPumpActive = true;
-    server.send(200, "text/plain", "Cold Pump ON");
-  });
-  server.on("/manual/cold/off", []() {
-    manualMode = true;
-    manualColdPumpActive = false;
-    server.send(200, "text/plain", "Cold Pump OFF");
-  });
-  server.on("/manual/target/on", []() {
-    manualMode = true;
-    manualTargetPumpActive = true;
-    server.send(200, "text/plain", "Target Pump ON");
-  });
-  server.on("/manual/target/off", []() {
-    manualMode = true;
-    manualTargetPumpActive = false;
-    server.send(200, "text/plain", "Target Pump OFF");
-  });
-  server.on("/manual/heater/on", []() {
-    manualMode = true;
-    manualHeaterActive = true;
-    server.send(200, "text/plain", "Heater ON");
-  });
-  server.on("/manual/heater/off", []() {
-    manualMode = true;
-    manualHeaterActive = false;
-    server.send(200, "text/plain", "Heater OFF");
-  });
-  server.on("/manual/valve/on", []() {
-    manualMode = true;
-    manualValveActive = true;
-    server.send(200, "text/plain", "Valve OPEN");
-  });
-  server.on("/manual/valve/off", []() {
-    manualMode = true;
-    manualValveActive = false;
-    server.send(200, "text/plain", "Valve CLOSED");
-  });
-
-
-  server.begin();
+  configRoutes();
 }
+
 
 // --- Loop principal ---
 void loop() {
   unsigned long now = millis();
 
-  // Webserver
   if (now - lastWebCheck >= webCheckInterval) {
     server.handleClient();
     lastWebCheck = now;
@@ -301,22 +219,24 @@ void loop() {
     setRelay(COLD_PUMP_PIN, manualColdPumpActive);
     setRelay(TARGET_PUMP_PIN, manualTargetPumpActive);
     setRelay(HEATER_PIN, manualHeaterActive);
-    setRelay(VALVE_PIN, manualValveActive);
     vTaskDelay(1);
     return;
   }
 
-  // ✅ Leitura contínua dos sensores
   if (!testMode && now - lastSensorRequest >= sensorRequestInterval) {
-    sensors.requestTemperatures();  // ✅ esta linha resolve o problema
-
+    sensors.requestTemperatures();
     tempSource = sensors.getTempC(sensor_source);
     tempTarget = sensors.getTempC(sensor_target);
     tempCold = sensors.getTempC(sensor_cold);
+
+    // Armazena temperatura máxima do source
+    if (tempSource > maxTempSource) {
+      maxTempSource = tempSource;
+    }
+
     lastSensorRequest = now;
   }
 
-  // ✅ Log Serial
   if (now - lastSensorPrint >= sensorPrintInterval) {
     Serial.print("Source: ");
     Serial.print(tempSource, 2);
@@ -324,94 +244,78 @@ void loop() {
     Serial.print(tempTarget, 2);
     Serial.print(" C | Cold: ");
     Serial.print(tempCold, 2);
-    Serial.println(" C");
+    Serial.print(" C | MaxSrc: ");
+    Serial.println(maxTempSource, 2);
 
-    // ✅ LCD display
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Src:");
-    lcd.print(tempSource, 1);
-    lcd.print(" Tgt:");
-    lcd.print(tempTarget, 1);
+    // lcd.clear();
+    // lcd.setCursor(0, 0);
+    // lcd.print("SRC:");
+    // lcd.print(tempSource, 1);  // Ex: 23.4
+    // lcd.print(" CLD:");
+    // lcd.print(tempCold, 1);  // Ex: 17.2
 
-    lcd.setCursor(0, 1);
-    lcd.print("Cold:");
-    lcd.print(tempCold, 1);
-    lcd.print("C");
+    // lcd.setCursor(0, 1);
+    // lcd.print("TGT:");
+    // lcd.print(tempTarget, 1);  // Ex: 38.7
+    // lcd.print(" EFF:");
 
+    // int eff = (int)(coolingEfficiency + 0.5);  // Arredonda para inteiro
+    // lcd.print(eff);
+    // lcd.print("%");
+    displayTemperatures();
 
     lastSensorPrint = now;
   }
 
-  // ✅ Atualiza histórico (mantém a lógica)
   if (now - lastHistoryUpdate >= historyUpdateInterval) {
     if (testMode) {
       tempSource = random(250, 1200) / 10.0;
       tempTarget = random(250, 1200) / 10.0;
       tempCold = random(250, 1200) / 10.0;
     }
-
     shiftAndAdd(sourceTempHistory, HISTORY_SIZE, tempSource);
     shiftAndAdd(targetTempHistory, HISTORY_SIZE, tempTarget);
     shiftAndAdd(coldTempHistory, HISTORY_SIZE, tempCold);
 
-    float deltaT = tempSource - tempTarget;
-    float efficiency = (tempSource > 0) ? (deltaT / tempSource * 100.0) : 0.0;
+    // Calculo de eficiencia
+    float deltaFull = tempSource - tempCold;
+    float deltaTarget = tempTarget - tempCold;
+
+    float efficiency = 0.0;
+    if (deltaFull > 0.5) {  // evita divisões irreais ou instáveis
+      efficiency = deltaTarget / deltaFull;
+      efficiency = constrain(efficiency, 0.0, 1.0);  // clamp como proporção (0.0–1.0)
+      efficiency *= 100.0;                           // converte para porcentagem
+    } else {
+      efficiency = 0.0;  // ou NAN, se quiser indicar que é inválido
+    }
+
+    coolingEfficiency = efficiency;
     shiftAndAdd(efficiencyHistory, HISTORY_SIZE, efficiency);
 
     lastHistoryUpdate = now;
   }
 
-  // Leitura do nível
-  levelDetected = digitalRead(LEVEL_SENSOR_PIN);
-
-  // Controle da Cold Pump
-  if (coldPumpInterval > 0 && coldPumpDuration > 0) {
-    if (now - lastColdPulse >= coldPumpInterval && !coldPumpActive) {
-      setRelay(COLD_PUMP_PIN, true);
-      lastColdPulse = now;
-      coldPumpActive = true;
-    }
-    if (coldPumpActive && now - lastColdPulse >= coldPumpDuration) {
-      setRelay(COLD_PUMP_PIN, false);
-      coldPumpActive = false;
-    }
-  } else {
-    setRelay(COLD_PUMP_PIN, true);
-  }
-
-  // Controle da Target Pump
-  if (digitalRead(VALVE_PIN) == LOW) {
-    if (targetPumpInterval > 0 && targetPumpDuration > 0) {
-      if (now - lastTargetPulse >= targetPumpInterval && !targetPumpActive) {
-        setRelay(TARGET_PUMP_PIN, true);
-        lastTargetPulse = now;
-        targetPumpActive = true;
-      }
-      if (targetPumpActive && now - lastTargetPulse >= targetPumpDuration) {
-        setRelay(TARGET_PUMP_PIN, false);
-        targetPumpActive = false;
-      }
-    } else {
-      setRelay(TARGET_PUMP_PIN, true);
-    }
-  } else {
-    setRelay(TARGET_PUMP_PIN, false);
-    targetPumpActive = false;
-  }
-
-  // Controle do Heater e Valve
+  // Controle do Heater
   if (!heaterLockout) {
     if (tempSource < 60.0) {
       setRelay(HEATER_PIN, true);
+      setRelay(TARGET_PUMP_PIN, false);
     } else {
       setRelay(HEATER_PIN, false);
-      setRelay(VALVE_PIN, true);
+      setRelay(TARGET_PUMP_PIN, true);
       heaterLockout = true;
     }
   } else {
     setRelay(HEATER_PIN, false);
+    setRelay(TARGET_PUMP_PIN, true);
   }
+
+  // Cold Pump sempre ligada no modo automático
+  setRelay(COLD_PUMP_PIN, true);
+
+  // Source Recipe Temperature Check
+  handleOverTemperatureBlink();
 
   vTaskDelay(1);
 }

@@ -1,4 +1,71 @@
 // Routes
+void configRoutes() {
+  server.on("/", handleRoot);
+  server.on("/data", handleData);
+  server.on("/set", handleSet);
+
+  server.on("/chart.min.js", HTTP_GET, []() {
+    server.sendHeader("Cache-Control", "public, max-age=31536000");
+    server.send_P(200, "application/javascript", chartJs);
+  });
+
+  server.on("/reset_history", []() {
+    clearHistory();
+    maxTempSource = 0.0;
+    server.send(200, "text/plain", "History reset");
+  });
+
+  // Rotas manual mode
+  server.on("/manual/on", []() {
+    manualMode = true;
+    server.send(200, "text/plain", "Manual ON");
+  });
+
+  server.on("/manual/off", []() {
+    manualMode = false;
+    manualColdPumpActive = manualTargetPumpActive = manualHeaterActive = false;
+    server.send(200, "text/plain", "Manual OFF");
+  });
+
+  server.on("/manual/cold/on", []() {
+    manualMode = true;
+    manualColdPumpActive = true;
+    server.send(200, "text/plain", "Cold Pump ON");
+  });
+
+  server.on("/manual/cold/off", []() {
+    manualMode = true;
+    manualColdPumpActive = false;
+    server.send(200, "text/plain", "Cold Pump OFF");
+  });
+
+  server.on("/manual/target/on", []() {
+    manualMode = true;
+    manualTargetPumpActive = true;
+    server.send(200, "text/plain", "Target Pump ON");
+  });
+
+  server.on("/manual/target/off", []() {
+    manualMode = true;
+    manualTargetPumpActive = false;
+    server.send(200, "text/plain", "Target Pump OFF");
+  });
+
+  server.on("/manual/heater/on", []() {
+    manualMode = true;
+    manualHeaterActive = true;
+    server.send(200, "text/plain", "Heater ON");
+  });
+
+  server.on("/manual/heater/off", []() {
+    manualMode = true;
+    manualHeaterActive = false;
+    server.send(200, "text/plain", "Heater OFF");
+  });
+
+  server.begin();
+}
+
 void handleData() {
   String json = "{";
 
@@ -22,26 +89,30 @@ void handleData() {
 
   json += "],\"efficiency\":[";
   for (int i = 0; i < 10; i++) {
-    json += String(efficiencyHistory[i], 2);
+    json += String(efficiencyHistory[i] * 100.0, 2);
     if (i < 9) json += ",";
   }
 
   json += "],\"last_source\":" + String(tempSource, 2);
   json += ",\"last_target\":" + String(tempTarget, 2);
   json += ",\"last_cold\":" + String(tempCold, 2);
+  json += ",\"max_source\":" + String(maxTempSource, 2);
 
-  // Novos campos para atualização do Status (corrigido para relés invertidos)
+  // Campos de status
   json += ",\"heater\":" + String(isRelayOn(HEATER_PIN) ? "1" : "0");
   json += ",\"cold_pump\":" + String(isRelayOn(COLD_PUMP_PIN) ? "1" : "0");
   json += ",\"target_pump\":" + String(isRelayOn(TARGET_PUMP_PIN) ? "1" : "0");
-  json += ",\"valve\":" + String(isRelayOn(VALVE_PIN) ? "1" : "0");
   json += ",\"mode\":" + String(manualMode ? "1" : "0");
 
+  float coolingEfficiency = (tempTarget - tempCold) / (tempSource - tempCold);
+  if (coolingEfficiency < 0) coolingEfficiency = 0;
+  if (coolingEfficiency > 1) coolingEfficiency = 1;
+
+  json += ",\"cooling_eff\":" + String(coolingEfficiency * 100.0, 1);  // em porcentagem
 
   json += "}";
   server.send(200, "application/json", json);
 }
-
 
 
 void handleRoot() {
@@ -91,81 +162,89 @@ void handleRoot() {
   html += "<h2>Temperature Sensors</h2><p>";
   html += "Source Recipe: <b id='sourceTemp'>" + String(tempSource, 1) + " &deg;C</b><br>";
   html += "Target Recipe: <b id='targetTemp'>" + String(tempTarget, 1) + " &deg;C</b><br>";
-  html += "Cold Recipe: <b id='coldTemp'>" + String(tempCold, 1) + " &deg;C</b></p>";
+  html += "Cold Recipe: <b id='coldTemp'>" + String(tempCold, 1) + " &deg;C</b><br>";
+  html += "Max Temp Source: <b id='maxSourceTemp'>" + String(maxTempSource, 1) + " &deg;C</b></p>";
+
   html += "<h2>System Status</h2>";
   html += "<table style='width:100%; font-size:1em;'>";
   html += "<tr><td>Heater</td><td><span id='status-heater' class='badge " + String(isRelayOn(HEATER_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
-  html += "<tr><td>Cold Pump</td><td><span id='status-cold' class='badge " + String(isRelayOn(COLD_PUMP_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
   html += "<tr><td>Target Pump</td><td><span id='status-target' class='badge " + String(isRelayOn(TARGET_PUMP_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
-  html += "<tr><td>Valve</td><td><span id='status-valve' class='badge " + String(isRelayOn(VALVE_PIN) ? "yes'>OPEN" : "no'>CLOSED") + "</span></td></tr>";
+  html += "<tr><td>Cold Pump</td><td><span id='status-cold' class='badge " + String(isRelayOn(COLD_PUMP_PIN) ? "yes'>ON" : "no'>OFF") + "</span></td></tr>";
   html += "<tr><td>Mode</td><td><span id='status-mode' class='badge " + String(manualMode ? "no'>MANUAL" : "yes'>AUTO") + "</span></td></tr>";
   html += "</table></div>";
 
+
   // Pumps Info
-  html += "<div class='card'><h2>Pumps Info</h2>";
+  html += "<div class='card'><h2>Pump Infos</h2>";
 
-  // 👉 Cold Pump
-  float coldDuty = (coldPumpInterval > 0) ? ((float)coldPumpDuration / (float)coldPumpInterval) * 100.0 : 100.0;
-  float coldEffectiveFlow = (coldPumpInterval > 0) ? theoreticalMaxColdFlow * ((float)coldPumpDuration / (float)coldPumpInterval) : theoreticalMaxColdFlow;
-  float coldTimeFor5L = (coldEffectiveFlow > 0) ? (5.0 / coldEffectiveFlow) * 60.0 : 0;
-  String coldTimeStr = (coldTimeFor5L < 1.0) ? String(coldTimeFor5L * 60.0, 0) + " sec" : String(coldTimeFor5L, 1) + " min";
+  // Diferença de temperatura
+  float deltaT = tempTarget - tempCold;
+  if (deltaT < 0.1) deltaT = 0.1;
 
-  html += "<h3 style='margin-bottom:5px;'>Cold Pump</h3>";
-  html += "<p>Mode: <b>" + String((coldPumpInterval > 0 && coldPumpDuration > 0) ? "Pulsed" : "Continuous") + "</b><br>";
-  html += "Flow Rate: <b>" + String(coldEffectiveFlow, 1) + " L/h</b><br>";
-  html += "Duty Cycle: <b>" + String(coldDuty, 1) + " %</b><br>";
-  if (coldPumpInterval > 0 && coldPumpDuration > 0) {
-    float cyclesPerHour = 3600000.0 / coldPumpInterval;
-    float volumePerCycle = theoreticalMaxColdFlow * (coldPumpDuration / 3600000.0);
-    html += "Volume per Cycle: <b>" + String(volumePerCycle, 3) + " L</b><br>";
-    html += "Cycles per Hour: <b>" + String(cyclesPerHour, 0) + "</b><br>";
-  }
-  html += "Est. Time to recirculate 5L: <b>" + coldTimeStr + "</b></p>";
+  // Bombeamento
+  const float pumpFlowRate = 1.0;  // L/h
+  float timeFor1L = (1.0 / pumpFlowRate) * 60.0;
+  String timeStr = (timeFor1L < 1.0)
+                     ? String(timeFor1L * 60.0, 0) + " seg"
+                     : String(timeFor1L, 1) + " min";
 
-  // 👉 Target Pump
-  float targetDuty = (targetPumpInterval > 0) ? ((float)targetPumpDuration / (float)targetPumpInterval) * 100.0 : 100.0;
-  float targetEffectiveFlow = (targetPumpInterval > 0) ? theoreticalMaxTargetFlow * ((float)targetPumpDuration / (float)targetPumpInterval) : theoreticalMaxTargetFlow;
-  float targetTimeFor5L = (targetEffectiveFlow > 0) ? (5.0 / targetEffectiveFlow) * 60.0 : 0;
-  String targetTimeStr = (targetTimeFor5L < 1.0) ? String(targetTimeFor5L * 60.0, 0) + " sec" : String(targetTimeFor5L, 1) + " min";
+  // Parâmetros térmicos
+  const float pumpPower = 5.0;  // W
+  const float estimatedEfficiency = 0.3;
+  const float targetVolume = 3.0;
 
-  html += "<h3 style='margin-bottom:5px;'>Target Pump</h3>";
-  html += "<p>Mode: <b>" + String((targetPumpInterval > 0 && targetPumpDuration > 0) ? "Pulsed" : "Continuous") + "</b><br>";
-  html += "Flow Rate: <b>" + String(targetEffectiveFlow, 1) + " L/h</b><br>";
-  html += "Duty Cycle: <b>" + String(targetDuty, 1) + " %</b><br>";
-  html += "Est. Time to recirculate 5L: <b>" + targetTimeStr + "</b></p>";
+  // Cálculo modular
+  String coolTimeStr = calcularTempoResfriamento(tempTarget, tempCold, 1.0, pumpPower, estimatedEfficiency);
+  String totalCoolTimeStr = calcularTempoResfriamento(tempTarget, tempCold, targetVolume, pumpPower, estimatedEfficiency);
+
+  // Cold Pump
+  html += "<h3 style='margin-bottom:5px;'>Cold Recipe Pump</h3>";
+  html += "<p>Modo: <b>Continuo</b><br>";
+  html += "Vazao: <b><span id='pumpFlow'>" + String(pumpFlowRate, 1) + "</span> L/h</b><br>";
+  html += "Tempo estimado para recircular 1 L: <b id='recircTime'>" + timeStr + "</b><br>";
+  html += "Tempo estimado para resfriar 1&deg;C por litro (&#x0394;T = <span id='deltaT'>" + String(deltaT, 1) + "</span>&deg;C): <b id='coolTime'>" + coolTimeStr + "</b></p>";
+
+  // Target Pump
+  html += "<h3 style='margin-bottom:5px;'>Target Recipe Pump</h3>";
+  html += "<p>Mode: <b>Automatic (based on Source Recipe Temp.)</b><br>";
+  html += "Vazao: <b><span id='pumpFlow2'>" + String(pumpFlowRate, 1) + "</span> L/h</b><br>";
+  html += "Tempo estimado para recircular 1 L: <b id='recircTime2'>" + timeStr + "</b><br>";
+  html += "Tempo estimado para resfriar " + String(targetVolume, 1) + " L em 1&deg;C (&#x0394;T = <span id='deltaT2'>" + String(deltaT, 1) + "</span>&deg;C): <b id='totalCoolTime'>" + totalCoolTimeStr + "</b></p>";
 
   html += "</div>";
 
-  // Settings
-  html += "<div class='card' id='settings' style='display:none;'><h2>Adjust Settings</h2><form action='/set'>";
-  html += "<label>Cold Pump Pulse Interval (ms):</label><input name='interval' value='" + String(coldPumpInterval) + "'><br>";
-  html += "<label>Cold Pump Pulse Duration (ms):</label><input name='duration' value='" + String(coldPumpDuration) + "'><br>";
-  html += "<label>Target Recipe Pump Interval (ms):</label><input name='target_interval' value='" + String(targetPumpInterval) + "'><br>";
-  html += "<label>Target Recipe Pump Duration (ms):</label><input name='target_duration' value='" + String(targetPumpDuration) + "'><br>";
-  html += "<br><button type='submit'>Save</button></form>";
-  html += "<button onclick=\"fetch('/reset_history').then(()=>alert('History cleared!'));\">Reset History</button></div>";
 
-  // Manual control
+  // Manual control (ajustado com atualização imediata)
   html += "<div class='card' id='manual' style='display:none;'><h2>Manual Control</h2>";
-  html += "<button id='returnAuto' style='width:100%;background:#2ecc71;color:white;' onclick=\"fetch('/manual/off',{cache:'no-cache'}).then(() => { this.innerText = 'SWITCHING...'; this.disabled = true; })\">RETURN TO AUTO MODE</button>";
+  html += "<button id='returnAuto' style='width:100%;background:#2ecc71;color:white;' onclick=\"fetch('/manual/off',{cache:'no-cache'}).then(() => { this.innerText = 'SWITCHING...'; this.disabled = true; updateStatus(); })\">RETURN TO AUTO MODE</button>";
   html += "<table>";
+
+  // Controle do aquecedor
   html += "<tr><td>Heater</td><td>";
-  html += "<button onclick=\"fetch('/manual/heater/on',{cache:'no-cache'})\">ON</button> ";
-  html += "<button onclick=\"fetch('/manual/heater/off',{cache:'no-cache'})\">OFF</button>";
+  html += "<button onclick=\"fetch('/manual/heater/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
+  html += "<button onclick=\"fetch('/manual/heater/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
   html += "</td></tr>";
-  html += "<tr><td>Valve</td><td>";
-  html += "<button onclick=\"fetch('/manual/valve/on',{cache:'no-cache'})\">OPEN</button> ";
-  html += "<button onclick=\"fetch('/manual/valve/off',{cache:'no-cache'})\">CLOSE</button>";
+
+  // Controle da bomba quente
+  html += "<tr><td>Hot Pump</td><td>";
+  html += "<button onclick=\"fetch('/manual/target/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
+  html += "<button onclick=\"fetch('/manual/target/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
   html += "</td></tr>";
+
+  // Controle da bomba fria
   html += "<tr><td>Cold Pump</td><td>";
-  html += "<button onclick=\"fetch('/manual/cold/on',{cache:'no-cache'})\">ON</button> ";
-  html += "<button onclick=\"fetch('/manual/cold/off',{cache:'no-cache'})\">OFF</button>";
+  html += "<button onclick=\"fetch('/manual/cold/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
+  html += "<button onclick=\"fetch('/manual/cold/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
   html += "</td></tr>";
-  html += "<tr><td>Target Pump</td><td>";
-  html += "<button onclick=\"fetch('/manual/target/on',{cache:'no-cache'})\">ON</button> ";
-  html += "<button onclick=\"fetch('/manual/target/off',{cache:'no-cache'})\">OFF</button>";
-  html += "</td></tr>";
+
   html += "</table></div>";
+
+
+  // Settings
+  html += "<div class='card' id='settings' style='display:none;'><h2>Settings</h2>";
+  html += "<p>No configurable flow parameters. Pumps run continuously or automatically based on system logic.</p>";
+  html += "<button onclick=\"fetch('/reset_history').then(()=>alert('History and Max Temp cleared!'));\">Reset History</button>";
+  html += "</div>";
 
 
   // Chart Box
@@ -220,19 +299,10 @@ void handleRoot() {
   html += "  }";
   html += "});";
 
-  // Automatic Updates
-  html += "setInterval(() => {";
-  html += "  fetch('/data').then(r => r.json()).then(d => {";
-  html += "    chart.data.labels = [...Array(historySize).keys()].map(i => i * historyInterval);";
-  html += "    chart.data.datasets[0].data = d.source;";
-  html += "    chart.data.datasets[1].data = d.target;";
-  html += "    chart.data.datasets[2].data = d.cold;";
-  html += "    chart.data.datasets[3].data = d.efficiency;";
-  html += "    chart.update();";
-  html += "    document.getElementById('sourceTemp').innerHTML = d.last_source.toFixed(1) + ' \\u00B0C';";
-  html += "    document.getElementById('targetTemp').innerHTML = d.last_target.toFixed(1) + ' \\u00B0C';";
-  html += "    document.getElementById('coldTemp').innerHTML = d.last_cold.toFixed(1) + ' \\u00B0C';";
 
+  // Update Status para os botoes
+  html += "function updateStatus() {";
+  html += "  fetch('/data').then(r => r.json()).then(d => {";
   html += "    document.getElementById('status-heater').className = 'badge ' + (d.heater ? 'yes' : 'no');";
   html += "    document.getElementById('status-heater').innerText = d.heater ? 'ON' : 'OFF';";
 
@@ -242,17 +312,71 @@ void handleRoot() {
   html += "    document.getElementById('status-target').className = 'badge ' + (d.target_pump ? 'yes' : 'no');";
   html += "    document.getElementById('status-target').innerText = d.target_pump ? 'ON' : 'OFF';";
 
-  html += "    document.getElementById('status-valve').className = 'badge ' + (d.valve ? 'yes' : 'no');";
-  html += "    document.getElementById('status-valve').innerText = d.valve ? 'OPEN' : 'CLOSED';";
-
   html += "    document.getElementById('status-mode').className = 'badge ' + (d.mode ? 'no' : 'yes');";
   html += "    document.getElementById('status-mode').innerText = d.mode ? 'MANUAL' : 'AUTO';";
 
-  html += "    document.getElementById('returnAuto').disabled = !d.mode;";
-  html += "    document.getElementById('returnAuto').innerText = 'RETURN TO AUTO MODE';";
+  html += "    if (document.getElementById('status-valve')) {";
+  html += "      document.getElementById('status-valve').className = 'badge ' + (d.valve ? 'yes' : 'no');";
+  html += "      document.getElementById('status-valve').innerText = d.valve ? 'OPEN' : 'CLOSED';";
+  html += "    }";
 
+  html += "    if (document.getElementById('returnAuto')) {";
+  html += "      document.getElementById('returnAuto').disabled = !d.mode;";
+  html += "      document.getElementById('returnAuto').innerText = 'Back to Auto Mode';";
+  html += "    }";
+  html += "  });";
+  html += "}";
+
+
+  // Automatic Updates
+  html += "setInterval(() => {";
+  html += "  fetch('/data').then(r => r.json()).then(d => {";
+  html += "    chart.data.labels = [...Array(historySize).keys()].map(i => i * historyInterval);";
+  html += "    chart.data.datasets[0].data = d.source;";
+  html += "    chart.data.datasets[1].data = d.target;";
+  html += "    chart.data.datasets[2].data = d.cold;";
+  html += "    chart.data.datasets[3].data = d.efficiency;";
+  html += "    chart.update();";
+
+  // 🔄 Atualização das temperaturas
+  html += "    document.getElementById('sourceTemp').innerHTML = d.last_source.toFixed(1) + ' \\u00B0C';";
+  html += "    document.getElementById('targetTemp').innerHTML = d.last_target.toFixed(1) + ' \\u00B0C';";
+  html += "    document.getElementById('coldTemp').innerHTML = d.last_cold.toFixed(1) + ' \\u00B0C';";
+
+  // 🔄 Atualização dos tempos estimados
+  html += "    let deltaT = d.last_target - d.last_cold;";
+  html += "    if (deltaT < 0.1) deltaT = 0.1;";
+  html += "    const coolingEnergy = 4186.0;";
+  html += "    const pumpPower = 5.0;";
+  html += "    const efficiency = 0.3;";
+  html += "    const effectivePower = pumpPower * efficiency;";
+  html += "    const baseTimePerL = coolingEnergy / effectivePower;";
+  html += "    const adjustedPerL = baseTimePerL / deltaT;";
+  html += "    const adjustedTotal = adjustedPerL * 3.0;";  // para 3 litros
+
+  html += "    document.getElementById('deltaT').innerText = deltaT.toFixed(1);";
+  html += "    document.getElementById('coolTime').innerText = (adjustedPerL < 60 ? Math.round(adjustedPerL) + ' seg' : (adjustedPerL / 60).toFixed(1) + ' min');";
+  html += "    document.getElementById('totalCoolTime').innerText = (adjustedTotal < 60 ? Math.round(adjustedTotal) + ' seg' : (adjustedTotal / 60).toFixed(1) + ' min');";
+
+  // 🔄 Atualização de status e modo
+  html += "    if (document.getElementById('maxSourceTemp')) {";
+  html += "      document.getElementById('maxSourceTemp').innerHTML = d.max_source.toFixed(1) + ' \\u00B0C';";
+  html += "    }";
+  html += "    document.getElementById('status-heater').className = 'badge ' + (d.heater ? 'yes' : 'no');";
+  html += "    document.getElementById('status-heater').innerText = d.heater ? 'ON' : 'OFF';";
+  html += "    document.getElementById('status-cold').className = 'badge ' + (d.cold_pump ? 'yes' : 'no');";
+  html += "    document.getElementById('status-cold').innerText = d.cold_pump ? 'ON' : 'OFF';";
+  html += "    document.getElementById('status-target').className = 'badge ' + (d.target_pump ? 'yes' : 'no');";
+  html += "    document.getElementById('status-target').innerText = d.target_pump ? 'ON' : 'OFF';";
+  html += "    document.getElementById('status-valve').className = 'badge ' + (d.valve ? 'yes' : 'no');";
+  html += "    document.getElementById('status-valve').innerText = d.valve ? 'OPEN' : 'CLOSED';";
+  html += "    document.getElementById('status-mode').className = 'badge ' + (d.mode ? 'no' : 'yes');";
+  html += "    document.getElementById('status-mode').innerText = d.mode ? 'MANUAL' : 'AUTO';";
+  html += "    document.getElementById('returnAuto').disabled = !d.mode;";
+  html += "    document.getElementById('returnAuto').innerText = 'RETORNAR PARA MODO AUTOMÁTICO';";
   html += "  });";
   html += "}, 5000);";
+
 
 
 

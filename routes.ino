@@ -195,7 +195,7 @@ void handleRoot() {
   html += "Target Recipe: <b id='targetTemp'>" + String(tempTarget, 1) + " &deg;C</b><br>";
   html += "Cold Recipe: <b id='coldTemp'>" + String(tempCold, 1) + " &deg;C</b><br>";
   html += "Max Temp Source: <b id='maxSourceTemp'>" + String(maxTempSource, 1) + " &deg;C</b></p>";
-  html += "<tr><td>Cooling Efficiency<: /td><td><span id='cooling-eff'><b>" + String(coolingEfficiency, 1) + " %</b></span></td></tr>";
+  html += "<tr><td>Cooling Efficiency: </td><td><span id='cooling-eff'><b>" + String(coolingEfficiency, 1) + " %</b></span></td></tr>";
 
   html += "<h2>System Status</h2>";
   html += "<table style='width:100%; font-size:1em;'>";

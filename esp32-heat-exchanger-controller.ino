@@ -134,7 +134,7 @@ void setup() {
   pinMode(LED_AP_PIN, OUTPUT);
 
   setRelay(HEATER_PIN, false);
-  setRelay(COLD_PUMP_PIN, true);  // Bomba fria sempre ligada
+  setRelay(COLD_PUMP_PIN, false);  // Bomba fria sempre ligada
   setRelay(TARGET_PUMP_PIN, false);
   digitalWrite(LED_AP_PIN, LOW);
 

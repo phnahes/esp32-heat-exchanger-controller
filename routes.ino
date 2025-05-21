@@ -62,6 +62,9 @@ void configRoutes() {
     manualHeaterActive = false;
     server.send(200, "text/plain", "Heater OFF");
   });
+  server.on("/favicon.ico", []() {
+    server.send(204);  // No Content
+  });
 
   server.begin();
 }
@@ -144,7 +147,7 @@ void handleRoot() {
   html += "body.light {--bg-color:#2c3e50; --text-color:#ecf0f1; --card-bg:#34495e;}";
   html += "@media (max-width: 768px) {.grid {} .card {grid-column: span 1 !important;}}";
   html += "</style>";
-  html += "<script src=\"/chart.min.js\"></script></head>";
+  html += "</head>";
   html += "<body style='background: var(--bg-color); color: var(--text-color);'>";
 
   // Header Buttons
@@ -152,11 +155,38 @@ void handleRoot() {
   html += "<button onclick=\"toggleMode()\">Toggle Mode</button>";
   html += "<button onclick=\"toggleSettings()\">Settings</button>";
   html += "<button onclick=\"toggleManual()\">Manual</button>";
+  html += "<button onclick=\"toggleChart()\">Grafico</button>";
   html += "</div>";
 
   html += "<h1>Heat Exchanger Controller</h1>";
 
   html += "<div class='grid'>";
+
+  // Manual control (ajustado com atualização imediata)
+  html += "<div class='card' id='manual' style='display:none;'><h2>Manual Control</h2>";
+  html += "<button id='returnAuto' style='width:100%;background:#2ecc71;color:white;' onclick=\"if (this.dataset.mode === 'manual') { fetch('/manual/off',{cache:'no-cache'}).then(() => { this.innerText = 'SWITCHING...'; this.disabled = true; updateStatus(); }); }\">AUTO MODE ACTIVE</button>";
+  html += "<table>";
+
+  // Controle do aquecedor
+  html += "<tr><td>Heater</td><td>";
+  html += "<button onclick=\"fetch('/manual/heater/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
+  html += "<button onclick=\"fetch('/manual/heater/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
+  html += "</td></tr>";
+
+  // Controle da bomba quente
+  html += "<tr><td>Hot Pump</td><td>";
+  html += "<button onclick=\"fetch('/manual/target/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
+  html += "<button onclick=\"fetch('/manual/target/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
+  html += "</td></tr>";
+
+  // Controle da bomba fria
+  html += "<tr><td>Cold Pump</td><td>";
+  html += "<button onclick=\"fetch('/manual/cold/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
+  html += "<button onclick=\"fetch('/manual/cold/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
+  html += "</td></tr>";
+
+  html += "</table></div>";
+
 
   // Status
   html += "<div class='card'>";
@@ -165,6 +195,7 @@ void handleRoot() {
   html += "Target Recipe: <b id='targetTemp'>" + String(tempTarget, 1) + " &deg;C</b><br>";
   html += "Cold Recipe: <b id='coldTemp'>" + String(tempCold, 1) + " &deg;C</b><br>";
   html += "Max Temp Source: <b id='maxSourceTemp'>" + String(maxTempSource, 1) + " &deg;C</b></p>";
+  html += "<tr><td>Cooling Efficiency<: /td><td><span id='cooling-eff'><b>" + String(coolingEfficiency, 1) + " %</b></span></td></tr>";
 
   html += "<h2>System Status</h2>";
   html += "<table style='width:100%; font-size:1em;'>";
@@ -215,32 +246,6 @@ void handleRoot() {
   html += "</div>";
 
 
-  // Manual control (ajustado com atualização imediata)
-  html += "<div class='card' id='manual' style='display:none;'><h2>Manual Control</h2>";
-  html += "<button id='returnAuto' style='width:100%;background:#2ecc71;color:white;' onclick=\"fetch('/manual/off',{cache:'no-cache'}).then(() => { this.innerText = 'SWITCHING...'; this.disabled = true; updateStatus(); })\">RETURN TO AUTO MODE</button>";
-  html += "<table>";
-
-  // Controle do aquecedor
-  html += "<tr><td>Heater</td><td>";
-  html += "<button onclick=\"fetch('/manual/heater/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
-  html += "<button onclick=\"fetch('/manual/heater/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
-  html += "</td></tr>";
-
-  // Controle da bomba quente
-  html += "<tr><td>Hot Pump</td><td>";
-  html += "<button onclick=\"fetch('/manual/target/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
-  html += "<button onclick=\"fetch('/manual/target/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
-  html += "</td></tr>";
-
-  // Controle da bomba fria
-  html += "<tr><td>Cold Pump</td><td>";
-  html += "<button onclick=\"fetch('/manual/cold/on',{cache:'no-cache'}).then(updateStatus)\">ON</button> ";
-  html += "<button onclick=\"fetch('/manual/cold/off',{cache:'no-cache'}).then(updateStatus)\">OFF</button>";
-  html += "</td></tr>";
-
-  html += "</table></div>";
-
-
   // Settings
   html += "<div class='card' id='settings' style='display:none;'><h2>Settings</h2>";
   html += "<p>No configurable flow parameters. Pumps run continuously or automatically based on system logic.</p>";
@@ -249,9 +254,9 @@ void handleRoot() {
 
 
   // Chart Box
-  html += "<div class='card' style='grid-column: span 4;'><h2>Temperature Graph</h2>";
-  html += "<canvas id='chart' style='max-height: 300px; width: 100%;'></canvas></div>";
-
+  html += "<div class='card' id='chartBox' style='grid-column: span 4; display: none;'>";
+  html += "<h2>Temperature Graph</h2>";
+  html += "<canvas id='chart' style='max-height: 300px; width: 100%;'></canvas>";
   html += "</div>";
 
   // JS to toggle, charts and updates
@@ -259,6 +264,51 @@ void handleRoot() {
   html += "function toggleMode() { document.body.classList.toggle('light'); }";
   html += "function toggleSettings() { var s = document.getElementById('settings'); s.style.display = (s.style.display === 'none') ? 'block' : 'none'; }";
   html += "function toggleManual() { var s = document.getElementById('manual'); s.style.display = (s.style.display === 'none') ? 'block' : 'none'; }";
+
+  html += "function toggleChart() {";
+  html += "  var s = document.getElementById('chartBox');";
+  html += "  if (s.style.display === 'none') {";
+  html += "    if (!document.getElementById('chartjs-script')) {";
+  html += "      const scr = document.createElement('script');";
+  html += "      scr.src = '/chart.min.js?v=' + Date.now();";
+  html += "      scr.id = 'chartjs-script';";
+  html += "      scr.onload = () => { console.log('✅ Chart.js loaded'); renderChart(); };";
+  html += "      scr.onerror = () => console.error('❌ Failed to load Chart.js');";
+  html += "      document.head.appendChild(scr);";
+  html += "    } else {";
+  html += "      renderChart();";
+  html += "    }";
+  html += "  } else { s.style.display = 'none'; }";
+  html += "}";
+
+  // Chart dynamic load + render
+  html += "function renderChart() {";
+  html += "  console.log('renderChart iniciado');";
+  html += "  const chartBox = document.getElementById('chartBox');";
+  html += "  chartBox.style.display = 'block';";
+  html += "  const canvas = document.getElementById('chart');";
+  html += "  const ctx = canvas.getContext('2d');";
+  html += "  window.chart = new Chart(ctx, {";
+  html += "    type: 'line',";
+  html += "    data: {";
+  html += "      labels: [],";
+  html += "      datasets: [";
+  html += "        { label: 'Source Recipe', data: [], borderColor: 'red', fill: false, tension: 0.4 },";
+  html += "        { label: 'Target Recipe', data: [], borderColor: 'orange', fill: false, tension: 0.4 },";
+  html += "        { label: 'Cold Recipe', data: [], borderColor: 'blue', fill: false, tension: 0.4 }";
+  html += "      ]";
+  html += "    },";
+  html += "    options: {";
+  html += "      animation: " + String(animationEnabled ? "{}" : "{ duration: 0 }") + ",";
+  html += "      maintainAspectRatio: false,";
+  html += "      scales: {";
+  html += "        x: { title: { display: true, text: 'Time (s) since boot' } },";
+  html += "        y: { title: { display: true, text: 'Temperature (\\u00B0C)' }, position: 'left' }";
+  html += "      }";
+  html += "    }";
+  html += "  });";
+  html += "}";
+
 
   // ESP32 Variables
   html += "const historySize = " + String(HISTORY_SIZE) + ";";
@@ -276,31 +326,6 @@ void handleRoot() {
   html += "const efficiencyColor = 'green';";
   html += "const efficiencyLabel = 'Efficiency %';";
 
-  // Chart Creation
-  html += "let ctx = document.getElementById('chart').getContext('2d');";
-  html += "let chart = new Chart(ctx, {";
-  html += "  type: 'line',";
-  html += "  data: {";
-  html += "    labels: [],";
-  html += "    datasets: [";
-  html += "      { label: sourceLabel, data: [], borderColor: sourceColor, fill: false, tension: lineTension, borderDash: [5, 5], yAxisID: 'y' },";
-  html += "      { label: targetLabel, data: [], borderColor: targetColor, fill: false, tension: lineTension, borderDash: [5, 5], yAxisID: 'y' },";
-  html += "      { label: coldLabel, data: [], borderColor: coldColor, fill: false, tension: lineTension, borderDash: [5, 5], yAxisID: 'y' },";
-  html += "      { label: efficiencyLabel, data: [], borderColor: efficiencyColor, fill: false, tension: lineTension, yAxisID: 'y1' }";
-  html += "    ]";
-  html += "  },";
-  html += "  options: {";
-  html += "    animation: animationEnabled ? {} : { duration: 0 },";
-  html += "    maintainAspectRatio: false,";
-  html += "    scales: {";
-  html += "      x: { title: { display: true, text: 'Time (s) since boot' } },";
-  html += "      y: { title: { display: true, text: 'Temperature (\\u00B0C)' }, position: 'left' },";
-  html += "      y1: { title: { display: true, text: 'Efficiency (%)' }, position: 'right', grid: { drawOnChartArea: false } }";
-  html += "    }";
-  html += "  }";
-  html += "});";
-
-
   // Update Status para os botoes
   html += "function updateStatus() {";
   html += "  fetch('/data').then(r => r.json()).then(d => {";
@@ -316,14 +341,11 @@ void handleRoot() {
   html += "    document.getElementById('status-mode').className = 'badge ' + (d.mode ? 'no' : 'yes');";
   html += "    document.getElementById('status-mode').innerText = d.mode ? 'MANUAL' : 'AUTO';";
 
-  html += "    if (document.getElementById('status-valve')) {";
-  html += "      document.getElementById('status-valve').className = 'badge ' + (d.valve ? 'yes' : 'no');";
-  html += "      document.getElementById('status-valve').innerText = d.valve ? 'OPEN' : 'CLOSED';";
-  html += "    }";
-
-  html += "    if (document.getElementById('returnAuto')) {";
-  html += "      document.getElementById('returnAuto').disabled = !d.mode;";
-  html += "      document.getElementById('returnAuto').innerText = 'Back to Auto Mode';";
+  html += "    const returnBtn = document.getElementById('returnAuto');";
+  html += "    if (returnBtn) {";
+  html += "      returnBtn.disabled = !d.mode;";
+  html += "      returnBtn.dataset.mode = d.mode ? 'manual' : 'auto';";
+  html += "      returnBtn.innerText = d.mode ? 'RETURN TO AUTO MODE' : 'AUTO MODE ACTIVE';";
   html += "    }";
   html += "  });";
   html += "}";
@@ -332,19 +354,23 @@ void handleRoot() {
   // Automatic Updates
   html += "setInterval(() => {";
   html += "  fetch('/data').then(r => r.json()).then(d => {";
-  html += "    chart.data.labels = [...Array(historySize).keys()].map(i => i * historyInterval);";
-  html += "    chart.data.datasets[0].data = d.source;";
-  html += "    chart.data.datasets[1].data = d.target;";
-  html += "    chart.data.datasets[2].data = d.cold;";
-  html += "    chart.data.datasets[3].data = d.efficiency;";
-  html += "    chart.update();";
 
-  // 🔄 Atualização das temperaturas
+  // 🔄 Atualização do gráfico (se carregado)
+  //html += "    if (window.chart) {";
+  html += "    if (window.chart && chart.data && chart.data.labels) {";
+  html += "      chart.data.labels = [...Array(historySize).keys()].map(i => i * historyInterval);";
+  html += "      chart.data.datasets[0].data = d.source;";
+  html += "      chart.data.datasets[1].data = d.target;";
+  html += "      chart.data.datasets[2].data = d.cold;";
+  html += "      chart.update();";
+  html += "    }";
+
+  // 🔄 Atualização das temperaturas no painel
   html += "    document.getElementById('sourceTemp').innerHTML = d.last_source.toFixed(1) + ' \\u00B0C';";
   html += "    document.getElementById('targetTemp').innerHTML = d.last_target.toFixed(1) + ' \\u00B0C';";
   html += "    document.getElementById('coldTemp').innerHTML = d.last_cold.toFixed(1) + ' \\u00B0C';";
 
-  // 🔄 Atualização dos tempos estimados
+  // 🔄 Atualização dos tempos estimados de resfriamento
   html += "    let deltaT = d.last_target - d.last_cold;";
   html += "    if (deltaT < 0.1) deltaT = 0.1;";
   html += "    const coolingEnergy = 4186.0;";
@@ -353,33 +379,46 @@ void handleRoot() {
   html += "    const effectivePower = pumpPower * efficiency;";
   html += "    const baseTimePerL = coolingEnergy / effectivePower;";
   html += "    const adjustedPerL = baseTimePerL / deltaT;";
-  html += "    const adjustedTotal = adjustedPerL * 3.0;";  // para 3 litros
+  html += "    const adjustedTotal = adjustedPerL * 3.0;";
 
   html += "    document.getElementById('deltaT').innerText = deltaT.toFixed(1);";
   html += "    document.getElementById('coolTime').innerText = (adjustedPerL < 60 ? Math.round(adjustedPerL) + ' seg' : (adjustedPerL / 60).toFixed(1) + ' min');";
   html += "    document.getElementById('totalCoolTime').innerText = (adjustedTotal < 60 ? Math.round(adjustedTotal) + ' seg' : (adjustedTotal / 60).toFixed(1) + ' min');";
 
-  // 🔄 Atualização de status e modo
+  // 🔄 Atualização da temperatura máxima do Source
   html += "    if (document.getElementById('maxSourceTemp')) {";
   html += "      document.getElementById('maxSourceTemp').innerHTML = d.max_source.toFixed(1) + ' \\u00B0C';";
   html += "    }";
+
+  // 🔄 Atualização da eficiência de resfriamento no painel
+  html += "    document.getElementById('cooling-eff').innerHTML = '<b>' + d.cooling_eff.toFixed(1) + ' %</b>';";
+
+  // 🔄 Atualização dos status de relés e modo
   html += "    document.getElementById('status-heater').className = 'badge ' + (d.heater ? 'yes' : 'no');";
   html += "    document.getElementById('status-heater').innerText = d.heater ? 'ON' : 'OFF';";
+
   html += "    document.getElementById('status-cold').className = 'badge ' + (d.cold_pump ? 'yes' : 'no');";
   html += "    document.getElementById('status-cold').innerText = d.cold_pump ? 'ON' : 'OFF';";
+
   html += "    document.getElementById('status-target').className = 'badge ' + (d.target_pump ? 'yes' : 'no');";
   html += "    document.getElementById('status-target').innerText = d.target_pump ? 'ON' : 'OFF';";
-  html += "    document.getElementById('status-valve').className = 'badge ' + (d.valve ? 'yes' : 'no');";
-  html += "    document.getElementById('status-valve').innerText = d.valve ? 'OPEN' : 'CLOSED';";
+
+  html += "    if (document.getElementById('status-valve')) {";
+  html += "      document.getElementById('status-valve').className = 'badge ' + (d.valve ? 'yes' : 'no');";
+  html += "      document.getElementById('status-valve').innerText = d.valve ? 'OPEN' : 'CLOSED';";
+  html += "    }";
+
   html += "    document.getElementById('status-mode').className = 'badge ' + (d.mode ? 'no' : 'yes');";
   html += "    document.getElementById('status-mode').innerText = d.mode ? 'MANUAL' : 'AUTO';";
-  html += "    document.getElementById('returnAuto').disabled = !d.mode;";
-  html += "    document.getElementById('returnAuto').innerText = 'RETORNAR PARA MODO AUTOMÁTICO';";
+
+  // 🔄 Atualização do botão de retorno automático
+  html += "    if (document.getElementById('returnAuto')) {";
+  html += "      document.getElementById('returnAuto').disabled = !d.mode;";
+  html += "      document.getElementById('returnAuto').innerText = 'RETURN TO AUTO MODE';";
+  html += "    }";
+
   html += "  });";
   html += "}, 5000);";
-
-
-
 
   html += "</script></body></html>";
 

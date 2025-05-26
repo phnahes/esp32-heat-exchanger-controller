@@ -43,6 +43,8 @@ const unsigned long sensorRequestInterval = 2000;  // 30s
 unsigned long lastSensorPrint = 0;
 const unsigned long sensorPrintInterval = 2000;
 
+float heaterTempLimit = 40.0;
+
 // Pump control
 unsigned long lastTargetPulse = 0;
 unsigned long targetPumpInterval = 0;
@@ -215,14 +217,6 @@ void loop() {
     lastWebCheck = now;
   }
 
-  if (manualMode) {
-    setRelay(COLD_PUMP_PIN, manualColdPumpActive);
-    setRelay(TARGET_PUMP_PIN, manualTargetPumpActive);
-    setRelay(HEATER_PIN, manualHeaterActive);
-    vTaskDelay(1);
-    return;
-  }
-
   if (!testMode && now - lastSensorRequest >= sensorRequestInterval) {
     sensors.requestTemperatures();
     tempSource = sensors.getTempC(sensor_source);
@@ -318,26 +312,45 @@ void loop() {
     lastHistoryUpdate = now;
   }
 
-  // Controle do Heater
-  if (!heaterLockout) {
-    if (tempSource < 60.0) {
-      setRelay(HEATER_PIN, true);
-      setRelay(TARGET_PUMP_PIN, false);
+  // --- MODO MANUAL ---
+  if (manualMode) {
+    setRelay(COLD_PUMP_PIN, manualColdPumpActive);
+    setRelay(TARGET_PUMP_PIN, manualTargetPumpActive);
+    setRelay(HEATER_PIN, manualHeaterActive);
+  }
+
+  // --- MODO AUTOMÁTICO ---
+  if (!manualMode) {
+    if (!heaterLockout) {
+      if (tempSource < heaterTempLimit) {
+        setRelay(HEATER_PIN, true);
+
+        // Recirculação da água quente por 5s a cada 20s
+        if (!targetPumpActive && now - lastTargetPulse >= 20000) {
+          setRelay(TARGET_PUMP_PIN, true);
+          targetPumpActive = true;
+          lastTargetPulse = now;
+        }
+
+        if (targetPumpActive && now - lastTargetPulse >= 5000) {
+          setRelay(TARGET_PUMP_PIN, false);
+          targetPumpActive = false;
+        }
+
+      } else {
+        setRelay(HEATER_PIN, false);
+        setRelay(TARGET_PUMP_PIN, true);
+        heaterLockout = true;
+      }
     } else {
       setRelay(HEATER_PIN, false);
       setRelay(TARGET_PUMP_PIN, true);
-      heaterLockout = true;
     }
-  } else {
-    setRelay(HEATER_PIN, false);
-    setRelay(TARGET_PUMP_PIN, true);
+
+    // Cold Pump sempre ligada no automático
+    setRelay(COLD_PUMP_PIN, true);
   }
 
-  // Cold Pump sempre ligada no modo automático
-  setRelay(COLD_PUMP_PIN, true);
-
-  // Source Recipe Temperature Check
   handleOverTemperatureBlink();
-
   vTaskDelay(1);
 }
